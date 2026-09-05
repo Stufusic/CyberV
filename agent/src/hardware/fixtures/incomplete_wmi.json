@@ -1,0 +1,53 @@
+{
+  "components": [
+    {
+      "component_type": "Cpu",
+      "canonical_id": "cpu:intel:intel xeon gold 6330",
+      "attributes": {
+        "vendor": "intel",
+        "model": "intel xeon gold 6330",
+        "logical_cores": "8",
+        "family": "6"
+      },
+      "source": "Mock",
+      "status": "Complete",
+      "confidence": "High"
+    },
+    {
+      "component_type": "Memory",
+      "canonical_id": "ram:dimm 0:8589934592",
+      "attributes": {
+        "bank_label": "dimm 0",
+        "capacity_bytes": "8589934592"
+      },
+      "source": "Mock",
+      "status": "Complete",
+      "confidence": "Medium"
+    },
+    {
+      "component_type": "Storage",
+      "canonical_id": "disk:qemu harddisk:noserial:107374182400",
+      "attributes": {
+        "model": "qemu harddisk",
+        "size_bytes": "107374182400",
+        "interface": "scsi"
+      },
+      "source": "Mock",
+      "status": "Partial",
+      "confidence": "Medium"
+    },
+    {
+      "component_type": "Motherboard",
+      "canonical_id": "board:qemu:standard pc",
+      "attributes": {
+        "manufacturer": "qemu",
+        "product": "standard pc"
+      },
+      "source": "Mock",
+      "status": "Partial",
+      "confidence": "Medium"
+    }
+  ],
+  "collected_at": 1772784300,
+  "collector_version": "cyberv-mock-v0.1"
+}

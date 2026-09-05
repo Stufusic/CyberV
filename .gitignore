@@ -1,0 +1,43 @@
+# Rust
+target/
+**/*.rs.bk
+
+# Node / Web / Deno
+node_modules/
+.next/
+out/
+dist/
+build/
+.deno/
+
+# Environment & Secrets (TUÂN THỦ ĐIỀU 6, 9 - Rule.md)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.cert
+local_vault.json
+credentials.json
+
+# Supabase
+.supabase/
+supabase/.temp/
+
+# IDE & OS
+.vscode/
+.idea/
+*.swp
+*.swo
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Excluded per User Instruction (Khong up test va folder Docs len GitHub)
+Docs/
+tests/
+agent/tests/
+database/tests/
+release/
+

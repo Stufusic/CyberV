@@ -1,0 +1,73 @@
+{
+  "components": [
+    {
+      "component_type": "Cpu",
+      "canonical_id": "cpu:intel:intel core i7-13700k",
+      "attributes": {
+        "vendor": "intel",
+        "model": "intel core i7-13700k",
+        "logical_cores": "16",
+        "family": "6",
+        "processor_id": "bfebfbff000b0671"
+      },
+      "source": "Mock",
+      "status": "Complete",
+      "confidence": "High"
+    },
+    {
+      "component_type": "Memory",
+      "canonical_id": "ram:bank 0/dimm0:17179869184",
+      "attributes": {
+        "bank_label": "bank 0/dimm0",
+        "capacity_bytes": "17179869184",
+        "manufacturer": "corsair",
+        "part_number": "cmk32gx5m2b5600c36",
+        "speed_mhz": "5600"
+      },
+      "source": "Mock",
+      "status": "Complete",
+      "confidence": "High"
+    },
+    {
+      "component_type": "Memory",
+      "canonical_id": "ram:bank 1/dimm0:17179869184",
+      "attributes": {
+        "bank_label": "bank 1/dimm0",
+        "capacity_bytes": "17179869184",
+        "manufacturer": "corsair",
+        "part_number": "cmk32gx5m2b5600c36",
+        "speed_mhz": "5600"
+      },
+      "source": "Mock",
+      "status": "Complete",
+      "confidence": "High"
+    },
+    {
+      "component_type": "Storage",
+      "canonical_id": "disk:wd black sn850x 2tb:wdc8839201928:2000398934016",
+      "attributes": {
+        "model": "wd black sn850x 2tb",
+        "serial": "wdc8839201928",
+        "size_bytes": "2000398934016",
+        "interface": "nvme"
+      },
+      "source": "Mock",
+      "status": "Complete",
+      "confidence": "High"
+    },
+    {
+      "component_type": "Motherboard",
+      "canonical_id": "board:asustek computer inc.:rog strix z790-e gaming wifi",
+      "attributes": {
+        "manufacturer": "asustek computer inc.",
+        "product": "rog strix z790-e gaming wifi",
+        "serial": "23010192837482"
+      },
+      "source": "Mock",
+      "status": "Complete",
+      "confidence": "High"
+    }
+  ],
+  "collected_at": 1772784200,
+  "collector_version": "cyberv-mock-v0.1"
+}
