@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 authors = ["CyberV Security Team"]
 description = "Device-Binding Security Agent for CyberV"
+license = "Apache-2.0"
+
 
 [dependencies]
 # Cryptography primitives (Điều 2, 3 - Rule.md)

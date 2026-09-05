@@ -178,7 +178,23 @@ Kết quả được xuất ra thư mục `release/`:
 
 ---
 
-## 6. Giấy Phép & Tuyên Bố Miễn Trừ Trách Nhiệm
+## 6. Giấy Phép & Tuyên Bố Miễn Trừ Trách Nhiệm (License & Legal Disclaimer)
 
-* **Mục đích**: Dự án được phát triển nhằm mục đích nghiên cứu kiến trúc an ninh điểm cuối cấp cao, bảo vệ định danh thiết bị và phòng chống giả mạo phần cứng.
-* **Tuyên bố**: Tác giả không chịu trách nhiệm đối với việc sử dụng sai mục đích hoặc thiệt hại phát sinh từ việc tự ý áp dụng các chính sách kernel/WDAC không đúng quy trình kiểm toán khuyến nghị.
+Dự án CyberV được phân phối theo giấy phép mã nguồn mở **[Apache License 2.0](file:///c:/New%20PJ/CyberV/LICENSE)**.
+
+### 6.1 Điều khoản sử dụng & Bản quyền (Copyright Notice)
+```text
+Copyright (c) 2026 Stufusic and CyberV Contributors
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+```
+Chi tiết đầy đủ các quyền hạn sao chép, phân phối, sửa đổi mã nguồn và cấp quyền sáng chế được quy định tại tệp [`LICENSE`](file:///c:/New%20PJ/CyberV/LICENSE).
+
+### 6.2 Miễn trừ trách nhiệm kỹ thuật & An ninh (Disclaimer of Warranty & Limitation of Liability)
+1. **Mục đích nghiên cứu & Thực nghiệm**: CyberV được xây dựng phục vụ nghiên cứu kiến trúc an ninh điểm cuối cấp cao (High-Assurance Endpoint Security), chống giả mạo định danh thiết bị và phân tích tính toàn vẹn hệ thống.
+2. **Cảnh báo tương tác cấp thấp (Low-Level Systems & Kernel)**: Phần mềm tương tác trực tiếp với các giao diện phần cứng và hệ điều hành cấp sâu (Windows TBS TPM API, Named Pipe DACL, WMI/PCI Hardware Bus, Windows Defender Application Control - WDAC, và tùy chọn Kernel Driver).
+3. **Giới hạn trách nhiệm**:
+   - Phần mềm được cung cấp trên nguyên tắc **"NGUYÊN TRẠNG" (AS IS)**, **KHÔNG CÓ BẤT KỲ BẢO ĐẢM NÀO DÙ RÕ RÀNG HAY NGỤ Ý**.
+   - Nhóm tác giả và người đóng góp **hoàn toàn không chịu trách nhiệm** đối với bất kỳ khiếu nại, thiệt hại trực tiếp, gián tiếp, ngẫu nhiên hoặc hậu quả nào (bao gồm sự cố mất dữ liệu, lỗi khởi động hệ điều hành (BSOD/boot failure), khóa tiến trình do cấu hình sai WDAC, gián đoạn kinh doanh hoặc hỏng hóc phần cứng) phát sinh từ việc sử dụng, triển khai hoặc chỉnh sửa mã nguồn này.
+   - Người vận hành có nghĩa vụ kiểm thử kỹ lưỡng trên môi trường cô lập (Sandbox/Staging) và luôn tuân thủ nguyên tắc *Audit Mode First* trước khi áp dụng bất kỳ chính sách cưỡng chế (Enforcement) nào.
+
