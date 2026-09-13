@@ -76,7 +76,9 @@ Các phương pháp định danh thiết bị truyền thống (như Browser Fin
 
 ### 2.2. Chống Tua Ngược Trạng Thái Bằng TPM 2.0 (Contradiction Anti-Rollback)
 * Sử dụng bộ đếm đơn điệu phần cứng (Hardware NV Monotonic Counter) trong chip TPM 2.0 để thiết lập cơ chế **Phát hiện Bất nhất (Contradiction Detection)**:
-  $$\text{Software Version} < \texttt{TPM\_NV\_COUNTER} \implies \text{Snapshot Rollback Detected} \implies \text{Immediate Lockdown}$$
+  ```text
+  Software Version < TPM_NV_COUNTER ⟹ Snapshot Rollback Detected ⟹ Immediate Lockdown
+  ```
 * **Hỗ trợ 4 cấp độ đảm bảo (`TpmAssuranceType`)**: `HardwareBacked` (Discrete TPM 2.0 / fTPM), `VtpmBacked` (Virtual TPM trên Hypervisor), `OsProtected` (Windows DPAPI), và `SoftwareFallback` (môi trường kiểm thử).
 * **Giao dịch Hai Pha (`PendingCommitMarker`)**: Bảo vệ hệ thống khỏi tình huống mất điện đột ngột hoặc crash giữa lúc ghi đĩa và tăng counter TPM, loại trừ 100% rủi ro tự khóa máy nhầm.
 
@@ -107,7 +109,7 @@ Hệ thống được thiết kế xoay quanh 8 bất biến an ninh nền tản
 
 | Bất Biến | Tên & Phạm Vi | Cơ Chế Bảo Vệ Cốt Lõi | Hành Vi Vi Phạm |
 | :--- | :--- | :--- | :--- |
-| **INV-001** | **Fail-Closed Policy** | Policy Engine bắt buộc đưa ra quyết định `Isolate` khi driver bị gỡ hoặc điểm an ninh $\le 3000$. | **Tuyệt đối không bao giờ Fail-Open** ra kết quả `Allow`. |
+| **INV-001** | **Fail-Closed Policy** | Policy Engine bắt buộc đưa ra quyết định `Isolate` khi driver bị gỡ hoặc điểm an ninh <= 3000. | **Tuyệt đối không bao giờ Fail-Open** ra kết quả `Allow`. |
 | **INV-002** | **Verification Separation** | Phân tách rạch ròi cờ `is_hardware_verified`. Không bao giờ ngộ nhận `Unknown` là bằng chứng đã kiểm chứng. | Thiếu driver $\implies$ gán `false`. |
 | **INV-003** | **Asymmetric Recovery** | Quy trình khôi phục và tái cấp quyền bắt buộc phải có chữ ký bất đối xứng Ed25519 từ Master Authority. | Bất kỳ chữ ký sai lệch nào đều bị từ chối 100%. |
 | **INV-004** | **Kernel Shielding & ABI** | Trình điều khiển KMDF tước quyền can thiệp tiến trình qua `ObRegisterCallbacks` và gỡ bỏ sạch sẽ khi unload. | Chống Terminate, DLL Injection, PID Reuse. |
