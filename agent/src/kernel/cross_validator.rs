@@ -34,6 +34,8 @@ pub struct CrossLayerValidationReport {
     pub status: ValidationStatus,
     pub consistency_score: u32, // 0 - 10000
     pub penalty: u32,
+    #[serde(default)]
+    pub is_hardware_verified: bool,
     pub virtual_nodes: Vec<VirtualNode>,
     pub virtual_points: Vec<VirtualPoint>,
     pub description: String,
@@ -48,7 +50,7 @@ impl CrossLayerValidator {
         kernel_provider: &K,
     ) -> CrossLayerValidationReport {
         if !kernel_provider.is_driver_available() {
-            let vnode = create_kernel_vnode("UNKNOWN", 10000);
+            let vnode = create_kernel_vnode("UNKNOWN", 10000, false);
             let point = VirtualPoint::new(
                 "point:kernel_consistency",
                 10000,
@@ -59,6 +61,7 @@ impl CrossLayerValidator {
                 status: ValidationStatus::Unknown,
                 consistency_score: 10000,
                 penalty: 0,
+                is_hardware_verified: false,
                 virtual_nodes: vec![vnode],
                 virtual_points: vec![point],
                 description:
@@ -70,7 +73,7 @@ impl CrossLayerValidator {
         let kernel_obs = match kernel_provider.query_kernel_observation() {
             Some(obs) => obs,
             None => {
-                let vnode = create_kernel_vnode("UNKNOWN", 10000);
+                let vnode = create_kernel_vnode("UNKNOWN", 10000, false);
                 let point = VirtualPoint::new(
                     "point:kernel_consistency",
                     10000,
@@ -81,6 +84,7 @@ impl CrossLayerValidator {
                     status: ValidationStatus::Unknown,
                     consistency_score: 10000,
                     penalty: 0,
+                    is_hardware_verified: false,
                     virtual_nodes: vec![vnode],
                     virtual_points: vec![point],
                     description: "Driver Kernel không phản hồi dữ liệu".to_string(),
@@ -116,7 +120,7 @@ impl CrossLayerValidator {
                         && !clean_kernel.is_empty()
                         && clean_user != clean_kernel
                     {
-                        let vnode = create_kernel_vnode("CONTRADICTORY", 1500);
+                        let vnode = create_kernel_vnode("CONTRADICTORY", 1500, false);
                         let point = VirtualPoint::new(
                             "point:kernel_consistency",
                             1500,
@@ -131,6 +135,7 @@ impl CrossLayerValidator {
                             },
                             consistency_score: 1500,
                             penalty: 8500,
+                            is_hardware_verified: false,
                             virtual_nodes: vec![vnode],
                             virtual_points: vec![point],
                             description: "Phát hiện mâu thuẫn chéo giữa WMI và Kernel: Serial bị giả mạo ở Userland".to_string(),
@@ -140,7 +145,7 @@ impl CrossLayerValidator {
             }
         }
 
-        let vnode = create_kernel_vnode("CONSISTENT", 10000);
+        let vnode = create_kernel_vnode("CONSISTENT", 10000, true);
         let point = VirtualPoint::new(
             "point:kernel_consistency",
             10000,
@@ -151,6 +156,7 @@ impl CrossLayerValidator {
             status: ValidationStatus::Consistent,
             consistency_score: 10000,
             penalty: 0,
+            is_hardware_verified: true,
             virtual_nodes: vec![vnode],
             virtual_points: vec![point],
             description: "Quan sát từ Userland WMI và Kernel Probe trùng khớp 100%".to_string(),
@@ -158,10 +164,11 @@ impl CrossLayerValidator {
     }
 }
 
-fn create_kernel_vnode(status: &str, score: u32) -> VirtualNode {
+fn create_kernel_vnode(status: &str, score: u32, is_verified: bool) -> VirtualNode {
     let mut attrs = BTreeMap::new();
     attrs.insert("validation_status".to_string(), status.to_string());
     attrs.insert("consistency_score".to_string(), score.to_string());
+    attrs.insert("hardware_verified".to_string(), is_verified.to_string());
 
     VirtualNode {
         id: "vnode:kernel_cross_validation".to_string(),

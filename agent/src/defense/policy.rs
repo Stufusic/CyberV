@@ -135,6 +135,14 @@ impl SecurityPolicyEngine {
                 reason: "Composite Security Score Critically Degraded".to_string(),
                 severity: 10000 - composite_score,
             }
+        } else if !kernel_report.telemetry.is_shield_active || kernel_report.defense_score <= 3000 {
+            // Bất biến INV-001: Không bao giờ ALLOW hoặc STEP-UP khi Kernel Shield không hoạt động hoặc driver bị gỡ
+            rationales.push("Phát hiện can thiệp Kernel: Driver bị ngắt kết nối hoặc không phản hồi".to_string());
+            composite_score = 0;
+            PolicyDecision::Isolate {
+                reason: "Kernel Defense Tampered".to_string(),
+                severity: 9500,
+            }
         } else if achieved_assurance < config.minimum_assurance {
             rationales.push(format!(
                 "Cấp độ đảm bảo {} thấp hơn yêu cầu tối thiểu {}",

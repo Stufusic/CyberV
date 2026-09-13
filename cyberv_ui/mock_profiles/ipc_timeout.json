@@ -1,0 +1,38 @@
+{
+  "state": "UNKNOWN",
+  "policy_decision": "UNKNOWN",
+  "kernel_available": false,
+  "callback_active": false,
+  "hardware_verified": false,
+  "tpm_contradiction": false,
+  "in_recovery": false,
+  "is_ipc_connected": false,
+  "since": "08:34:00",
+  "reason": "Agent IPC Disconnected: Cannot connect to \\\\.\\pipe\\CyberVIPC",
+  "driver": {
+    "status": "UNKNOWN",
+    "version": "Unknown",
+    "loaded_at": "N/A",
+    "callback_active": false,
+    "protected_pid": 0,
+    "blocked_terminations": 0,
+    "blocked_vm_reads": 0,
+    "blocked_vm_writes": 0,
+    "telemetry_updated_at": "Never",
+    "pci_observations_count": 0
+  },
+  "recent_events": [
+    {
+      "event_id": "EVT-88600",
+      "timestamp": "2026-09-13 08:34:00",
+      "source": "Local IPC",
+      "event_type": "Connection Failed",
+      "severity": "CRITICAL",
+      "previous_state": "PROTECTED",
+      "current_state": "UNKNOWN",
+      "trigger": "Named Pipe open error",
+      "evidence": "Windows Error 2 (ERROR_FILE_NOT_FOUND)",
+      "reason": "CyberVAgent service might be stopped"
+    }
+  ]
+}

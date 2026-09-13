@@ -1,18 +1,16 @@
 // CyberVProbe KMDF Driver Entry & IOCTL Handler (HCE-6 & FSE-1)
-// Ref: Docs/rv10.md HCE-6 & Docs/rv11.md FSE-1 Section 2
-// Note: Driver interacts via supported KMDF APIs and ObRegisterCallbacks without raw physical memory access.
+// Enforces Object Manager callbacks, caller authorization, and device ACL hardening.
 
 #include <ntddk.h>
 #include <wdf.h>
 #include "ioctl.h"
+#include "ob_callbacks.h"
 
 DRIVER_INITIALIZE DriverEntry;
 EVT_WDF_DRIVER_DEVICE_ADD CyberVProbeEvtDeviceAdd;
+EVT_WDF_DRIVER_UNLOAD CyberVProbeEvtDriverUnload;
 EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL CyberVProbeEvtIoDeviceControl;
 
-// Global Shield Telemetry & Registration State
-static CYBERV_SHIELD_TELEMETRY g_ShieldTelemetry = { 0 };
-static CYBERV_PROTECTED_PROCESS_REGISTRATION g_RegisteredProcess = { 0 };
 static PVOID g_RegistrationHandle = NULL;
 
 NTSTATUS DriverEntry(
@@ -23,8 +21,33 @@ NTSTATUS DriverEntry(
     NTSTATUS status;
 
     WDF_DRIVER_CONFIG_INIT(&config, CyberVProbeEvtDeviceAdd);
+    config.EvtDriverUnload = CyberVProbeEvtDriverUnload;
+
     status = WdfDriverCreate(DriverObject, RegistryPath, WDF_NO_OBJECT_ATTRIBUTES, &config, WDF_NO_HANDLE);
-    return status;
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+
+    // Initialize ObRegisterCallbacks for process handle filtering
+    status = InitializeObCallbacks(&g_RegistrationHandle);
+    if (!NT_SUCCESS(status)) {
+        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CyberVProbe] Failed to initialize ObCallbacks: 0x%08X\n", status));
+        // Degradation handled by fail-closed policy
+    }
+
+    return STATUS_SUCCESS;
+}
+
+VOID CyberVProbeEvtDriverUnload(
+    _In_ WDFDRIVER Driver
+) {
+    UNREFERENCED_PARAMETER(Driver);
+
+    // Unregister callbacks cleanly before unload
+    if (g_RegistrationHandle != NULL) {
+        UninitializeObCallbacks(g_RegistrationHandle);
+        g_RegistrationHandle = NULL;
+    }
 }
 
 NTSTATUS CyberVProbeEvtDeviceAdd(
@@ -36,11 +59,20 @@ NTSTATUS CyberVProbeEvtDeviceAdd(
     WDF_IO_QUEUE_CONFIG queueConfig;
     DECLARE_CONST_UNICODE_STRING(ntDeviceName, L"\\Device\\CyberVProbe");
     DECLARE_CONST_UNICODE_STRING(symbolicLinkName, L"\\DosDevices\\CyberVProbe");
+    
+    // Explicit SDDL: System All, Administrators All (SDDL_DEVOBJ_SYS_ALL_ADM_ALL)
+    // Denies unprivileged standard users from sending arbitrary IOCTLs
+    DECLARE_CONST_UNICODE_STRING(sddlString, L"D:P(A;;GA;;;SY)(A;;GA;;;BA)");
 
     UNREFERENCED_PARAMETER(Driver);
 
     status = WdfDeviceInitAssignName(DeviceInit, &ntDeviceName);
     if (!NT_SUCCESS(status)) return status;
+
+    status = WdfDeviceInitAssignSDDLString(DeviceInit, &sddlString);
+    if (!NT_SUCCESS(status)) return status;
+
+    WdfDeviceInitSetDeviceType(DeviceInit, FILE_DEVICE_CYBERV);
 
     status = WdfDeviceCreate(&DeviceInit, WDF_NO_OBJECT_ATTRIBUTES, &device);
     if (!NT_SUCCESS(status)) return status;
@@ -71,6 +103,7 @@ VOID CyberVProbeEvtIoDeviceControl(
 
     switch (IoControlCode) {
         case IOCTL_CYBERV_GET_PCI_INFO:
+        case IOCTL_CYBERV_GET_TOPOLOGY:
             if (OutputBufferLength < sizeof(CYBERV_KERNEL_OBSERVATION)) {
                 status = STATUS_BUFFER_TOO_SMALL;
                 break;
@@ -79,8 +112,9 @@ VOID CyberVProbeEvtIoDeviceControl(
             if (NT_SUCCESS(status) && outBuffer != NULL) {
                 PCYBERV_KERNEL_OBSERVATION obs = (PCYBERV_KERNEL_OBSERVATION)outBuffer;
                 RtlZeroMemory(obs, sizeof(CYBERV_KERNEL_OBSERVATION));
-                obs->DriverVersion = 1;
+                obs->DriverVersion = CYBERV_ABI_VERSION;
                 obs->DeviceCount = 0; // Populated by BUS_INTERFACE_STANDARD queries
+                obs->ObservedAt = (unsigned long long)KeQueryUnbiasedInterruptTime();
                 bytesReturned = sizeof(CYBERV_KERNEL_OBSERVATION);
             }
             break;
@@ -93,9 +127,16 @@ VOID CyberVProbeEvtIoDeviceControl(
             status = WdfRequestRetrieveInputBuffer(Request, sizeof(CYBERV_PROTECTED_PROCESS_REGISTRATION), &inBuffer, NULL);
             if (NT_SUCCESS(status) && inBuffer != NULL) {
                 PCYBERV_PROTECTED_PROCESS_REGISTRATION reg = (PCYBERV_PROTECTED_PROCESS_REGISTRATION)inBuffer;
-                g_RegisteredProcess = *reg;
-                g_ShieldTelemetry.ProtectedPid = reg->ProcessId;
-                g_ShieldTelemetry.IsShieldActive = 1;
+                
+                // Caller identity verification: Ensure registration can only be requested
+                // for the caller's own PID or by SYSTEM
+                ULONG callerPid = (ULONG)(ULONG_PTR)PsGetCurrentProcessId();
+                if (callerPid != reg->ProcessId && callerPid != 4) { // PID 4 is System
+                    status = STATUS_ACCESS_DENIED;
+                    break;
+                }
+
+                status = SetProtectedProcess(reg->ProcessId, reg->ProcessStartTime, reg->RegistrationNonce);
                 bytesReturned = 0;
             }
             break;
@@ -107,7 +148,7 @@ VOID CyberVProbeEvtIoDeviceControl(
             }
             status = WdfRequestRetrieveOutputBuffer(Request, sizeof(CYBERV_SHIELD_TELEMETRY), &outBuffer, NULL);
             if (NT_SUCCESS(status) && outBuffer != NULL) {
-                RtlCopyMemory(outBuffer, &g_ShieldTelemetry, sizeof(CYBERV_SHIELD_TELEMETRY));
+                GetShieldTelemetry((PCYBERV_SHIELD_TELEMETRY)outBuffer);
                 bytesReturned = sizeof(CYBERV_SHIELD_TELEMETRY);
             }
             break;

@@ -233,20 +233,39 @@ impl SecurityEventBus {
         Self::default()
     }
 
-    /// Đưa một sự kiện an ninh mới vào bus
+    /// Đưa một sự kiện an ninh mới vào bus (hỗ trợ tự phục hồi khi Mutex bị nhiễm độc)
     pub fn publish(&self, event: SecurityEvent) {
-        if let Ok(mut lock) = self.events.lock() {
-            lock.push(event);
+        match self.events.lock() {
+            Ok(mut lock) => lock.push(event),
+            Err(poisoned) => {
+                let mut lock = poisoned.into_inner();
+                lock.push(event);
+            }
         }
     }
 
-    /// Lấy toàn bộ sự kiện hiện có và xóa hàng đợi
+    /// Lấy toàn bộ sự kiện hiện có và xóa hàng đợi (phục hồi an toàn nếu bị poison)
     pub fn drain_events(&self) -> Vec<SecurityEvent> {
-        if let Ok(mut lock) = self.events.lock() {
-            std::mem::take(&mut *lock)
-        } else {
-            Vec::new()
+        match self.events.lock() {
+            Ok(mut lock) => std::mem::take(&mut *lock),
+            Err(poisoned) => {
+                let mut lock = poisoned.into_inner();
+                std::mem::take(&mut *lock)
+            }
         }
+    }
+
+    /// Kiểm tra xem EventBus có từng bị nhiễm độc do crash ở luồng khác không
+    pub fn is_poisoned(&self) -> bool {
+        self.events.is_poisoned()
+    }
+
+    #[doc(hidden)]
+    pub fn poison_for_test(&self) {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = self.events.lock().unwrap();
+            panic!("Poisoning mutex deliberately for test");
+        }));
     }
 
     /// Chuyển đổi toàn bộ sự kiện thành danh sách EvidenceItem

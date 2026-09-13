@@ -6,6 +6,7 @@
 pub mod authorization;
 pub mod pipe_acl;
 pub mod protocol;
+pub mod server;
 
 pub use authorization::{IpcAuthorizer, IpcClientIdentity};
 pub use pipe_acl::{PipeAclManager, PipeSecurityDescriptor};

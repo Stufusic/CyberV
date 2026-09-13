@@ -1,0 +1,38 @@
+{
+  "state": "ISOLATED",
+  "policy_decision": "ISOLATE",
+  "kernel_available": true,
+  "callback_active": true,
+  "hardware_verified": false,
+  "tpm_contradiction": true,
+  "in_recovery": false,
+  "is_ipc_connected": true,
+  "since": "08:30:15",
+  "reason": "Emergency Isolation: Hardware TPM rollback contradiction detected",
+  "driver": {
+    "status": "ACTIVE",
+    "version": "1.0.2",
+    "loaded_at": "08:14:10",
+    "callback_active": true,
+    "protected_pid": 4812,
+    "blocked_terminations": 2,
+    "blocked_vm_reads": 5,
+    "blocked_vm_writes": 0,
+    "telemetry_updated_at": "Just now",
+    "pci_observations_count": 37
+  },
+  "recent_events": [
+    {
+      "event_id": "EVT-88301",
+      "timestamp": "2026-09-13 08:30:15",
+      "source": "TPM Trust Provider",
+      "event_type": "Hardware Rollback Detected",
+      "severity": "EMERGENCY",
+      "previous_state": "PROTECTED",
+      "current_state": "ISOLATED",
+      "trigger": "TPM Monotonic Counter Mismatch",
+      "evidence": "Disk Counter (v1) < TPM Hardware NV Counter (v4)",
+      "reason": "Snapshot restoration or disk cloning attack detected"
+    }
+  ]
+}

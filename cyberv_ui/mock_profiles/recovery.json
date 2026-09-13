@@ -1,0 +1,43 @@
+{
+  "state": "RECOVERY",
+  "policy_decision": "RECOVERY",
+  "kernel_available": true,
+  "callback_active": true,
+  "hardware_verified": false,
+  "tpm_contradiction": false,
+  "in_recovery": true,
+  "is_ipc_connected": true,
+  "since": "08:31:00",
+  "reason": "Administrative Ed25519 signature required to unlock device",
+  "recovery": {
+    "challenge_id": "CHAL-9F81-22A1-BC04",
+    "ttl_seconds": 60,
+    "purpose": "CYBERV/DBS/RECOVERY/v1"
+  },
+  "driver": {
+    "status": "ACTIVE",
+    "version": "1.0.2",
+    "loaded_at": "08:14:10",
+    "callback_active": true,
+    "protected_pid": 4812,
+    "blocked_terminations": 0,
+    "blocked_vm_reads": 0,
+    "blocked_vm_writes": 0,
+    "telemetry_updated_at": "5s ago",
+    "pci_observations_count": 37
+  },
+  "recent_events": [
+    {
+      "event_id": "EVT-88401",
+      "timestamp": "2026-09-13 08:31:00",
+      "source": "Recovery Subsystem",
+      "event_type": "Challenge Issued",
+      "severity": "WARNING",
+      "previous_state": "ISOLATED",
+      "current_state": "RECOVERY",
+      "trigger": "User initiated recovery",
+      "evidence": "Non-replayable Nonce generated (60s TTL)",
+      "reason": "Waiting for Master Authority Key signature"
+    }
+  ]
+}

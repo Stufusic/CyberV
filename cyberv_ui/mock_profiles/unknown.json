@@ -1,0 +1,25 @@
+{
+  "state": "UNKNOWN",
+  "policy_decision": "UNKNOWN",
+  "kernel_available": false,
+  "callback_active": false,
+  "hardware_verified": false,
+  "tpm_contradiction": false,
+  "in_recovery": false,
+  "is_ipc_connected": true,
+  "since": "Just now",
+  "reason": "Hardware evidence has not been verified yet",
+  "driver": {
+    "status": "OFFLINE",
+    "version": "Unknown",
+    "loaded_at": "N/A",
+    "callback_active": false,
+    "protected_pid": 0,
+    "blocked_terminations": 0,
+    "blocked_vm_reads": 0,
+    "blocked_vm_writes": 0,
+    "telemetry_updated_at": "Never",
+    "pci_observations_count": 0
+  },
+  "recent_events": []
+}

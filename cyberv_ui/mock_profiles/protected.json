@@ -1,0 +1,61 @@
+{
+  "state": "PROTECTED",
+  "policy_decision": "ALLOW",
+  "kernel_available": true,
+  "callback_active": true,
+  "hardware_verified": true,
+  "tpm_contradiction": false,
+  "in_recovery": false,
+  "is_ipc_connected": true,
+  "since": "08:15:22",
+  "driver": {
+    "status": "ACTIVE",
+    "version": "1.0.2 (Build 385201)",
+    "loaded_at": "Today at 08:14:10",
+    "callback_active": true,
+    "protected_pid": 4812,
+    "blocked_terminations": 0,
+    "blocked_vm_reads": 0,
+    "blocked_vm_writes": 0,
+    "telemetry_updated_at": "1.2s ago",
+    "pci_observations_count": 37
+  },
+  "recent_events": [
+    {
+      "event_id": "EVT-88210",
+      "timestamp": "2026-09-13 08:31:22",
+      "source": "Kernel Shield",
+      "event_type": "Protection Verified",
+      "severity": "NOTICE",
+      "previous_state": "STARTING",
+      "current_state": "PROTECTED",
+      "trigger": "Core Agent IPC handshake",
+      "evidence": "ObRegisterCallbacks handle confirmed active",
+      "reason": "Process 4812 registered for object protection"
+    },
+    {
+      "event_id": "EVT-88209",
+      "timestamp": "2026-09-13 08:30:14",
+      "source": "Driver",
+      "event_type": "Telemetry Refreshed",
+      "severity": "INFO",
+      "previous_state": "PROTECTED",
+      "current_state": "PROTECTED",
+      "trigger": "Periodic 30s timer",
+      "evidence": "IOCTL_CYBERV_GET_SHIELD_TELEMETRY roundtrip 0.3ms",
+      "reason": "All 37 PCI devices verified matching topology"
+    },
+    {
+      "event_id": "EVT-88208",
+      "timestamp": "2026-09-13 08:29:51",
+      "source": "Policy Engine",
+      "event_type": "Invariant Check Passed",
+      "severity": "INFO",
+      "previous_state": "PROTECTED",
+      "current_state": "PROTECTED",
+      "trigger": "Hardware evidence re-evaluation",
+      "evidence": "SHA-512 Verification Hash stable",
+      "reason": "INV-001 through INV-008 validated"
+    }
+  ]
+}

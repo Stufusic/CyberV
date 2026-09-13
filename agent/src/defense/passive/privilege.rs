@@ -12,6 +12,8 @@ pub struct PrivilegeIsolationReport {
     pub is_driver_privilege_held: bool,
     pub is_tcb_privilege_held: bool,
     pub is_least_privilege_active: bool,
+    #[serde(default)]
+    pub is_verified: bool,
     pub privilege_score: u32, // 0 - 10000
     pub summary: String,
 }
@@ -44,6 +46,7 @@ impl PrivilegeManager {
             is_driver_privilege_held: is_driver_held,
             is_tcb_privilege_held: is_tcb_held,
             is_least_privilege_active,
+            is_verified: true,
             privilege_score,
             summary,
         }

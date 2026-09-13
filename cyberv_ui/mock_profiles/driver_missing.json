@@ -1,0 +1,38 @@
+{
+  "state": "DEGRADED",
+  "policy_decision": "ALLOW",
+  "kernel_available": false,
+  "callback_active": false,
+  "hardware_verified": true,
+  "tpm_contradiction": false,
+  "in_recovery": false,
+  "is_ipc_connected": true,
+  "since": "08:33:00",
+  "reason": "Kernel driver missing; Fail-Closed policy forces DEGRADED",
+  "driver": {
+    "status": "NOT_INSTALLED",
+    "version": "None",
+    "loaded_at": "N/A",
+    "callback_active": false,
+    "protected_pid": 0,
+    "blocked_terminations": 0,
+    "blocked_vm_reads": 0,
+    "blocked_vm_writes": 0,
+    "telemetry_updated_at": "Never",
+    "pci_observations_count": 0
+  },
+  "recent_events": [
+    {
+      "event_id": "EVT-88500",
+      "timestamp": "2026-09-13 08:33:00",
+      "source": "Kernel Shield",
+      "event_type": "Driver Registration Missing",
+      "severity": "CRITICAL",
+      "previous_state": "STARTING",
+      "current_state": "DEGRADED",
+      "trigger": "Initialization check",
+      "evidence": "SCM OpenServiceW returned ERROR_SERVICE_DOES_NOT_EXIST",
+      "reason": "Run install-driver.ps1 to deploy CyberVProbe.sys"
+    }
+  ]
+}

@@ -37,6 +37,7 @@ windows-sys = { version = "0.52", features = [
     "Win32_Security_Cryptography",
     "Win32_Foundation",
     "Win32_System_Memory",
+    "Win32_System_Services",
 ] }
 
 # Logging & Error handling (Điều 18, 19 - Rule.md)

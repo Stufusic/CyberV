@@ -5,8 +5,109 @@ use cyberv_agent::hardware::{collect_hardware_snapshot, HardwareReport};
 use cyberv_agent::identity::{DeviceSecureStorage, SecureRandom};
 use cyberv_agent::protocol::*;
 
+fn print_usage() {
+    println!("CyberV Security Agent CLI & Service Controller");
+    println!("Usage: cyberv-agent [COMMAND]");
+    println!();
+    println!("Commands:");
+    println!("  run          Run interactive observation and graph engine demo (default)");
+    println!("  install      Install CyberV Agent as a Windows Service (SCM)");
+    println!("  uninstall    Uninstall CyberV Agent from Windows Service Manager");
+    println!("  start        Start the CyberV Agent Windows Service");
+    println!("  stop         Stop the CyberV Agent Windows Service");
+    println!("  status       Query current status of the CyberV Agent Windows Service");
+    println!("  --service    Entry point invoked by Windows SCM dispatcher");
+    println!("  help         Display this help message");
+}
+
 #[tokio::main]
 async fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let command = args.get(1).map(|s| s.as_str()).unwrap_or("run");
+
+    match command {
+        "--service" | "service" => {
+            println!("[*] Starting CyberV Agent under Windows Service Control Manager...");
+            if let Err(e) = cyberv_agent::service::run_service_dispatcher() {
+                eprintln!("[-] Service dispatcher failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+        "install" => {
+            println!("[*] Installing CyberV Agent Windows Service...");
+            match cyberv_agent::service::install_service(None) {
+                Ok(_) => {
+                    println!("[+] CyberV Agent service installed successfully!");
+                }
+                Err(e) => {
+                    eprintln!("[-] Failed to install service: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        "uninstall" => {
+            println!("[*] Uninstalling CyberV Agent Windows Service...");
+            match cyberv_agent::service::uninstall_service() {
+                Ok(_) => {
+                    println!("[+] CyberV Agent service uninstalled successfully!");
+                }
+                Err(e) => {
+                    eprintln!("[-] Failed to uninstall service: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        "start" => {
+            println!("[*] Starting CyberV Agent Windows Service...");
+            match cyberv_agent::service::start_service() {
+                Ok(_) => {
+                    println!("[+] CyberV Agent service started successfully!");
+                }
+                Err(e) => {
+                    eprintln!("[-] Failed to start service: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        "stop" => {
+            println!("[*] Stopping CyberV Agent Windows Service...");
+            match cyberv_agent::service::stop_service() {
+                Ok(_) => {
+                    println!("[+] CyberV Agent service stopped successfully!");
+                }
+                Err(e) => {
+                    eprintln!("[-] Failed to stop service: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        "status" => {
+            println!("[*] Querying CyberV Agent Windows Service status...");
+            match cyberv_agent::service::query_service_status() {
+                Ok(state) => {
+                    println!("[+] Service Status: {}", state);
+                }
+                Err(e) => {
+                    eprintln!("[-] Failed to query service status: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        "--help" | "-h" | "help" => {
+            print_usage();
+        }
+        "run" => {
+            run_interactive_demo().await;
+        }
+        other => {
+            eprintln!("[-] Unknown command: '{}'", other);
+            print_usage();
+            std::process::exit(1);
+        }
+    }
+}
+
+async fn run_interactive_demo() {
     // Khởi tạo tracing log chuẩn (Không bao giờ log secrets - Điều 6, 18, 19 Rule.md)
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())

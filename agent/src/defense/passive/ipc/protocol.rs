@@ -9,6 +9,7 @@ pub const MAX_IPC_MESSAGE_SIZE: usize = 65536; // 64 KB Safe Limit
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IpcCommand {
+    Handshake { client_version: String, nonce_hex: String },
     GetStatus,
     AttestationChallenge { nonce_hex: String },
     HeartbeatPing { timestamp: u64 },

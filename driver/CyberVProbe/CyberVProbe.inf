@@ -1,0 +1,65 @@
+;
+; CyberVProbe.inf
+;
+; CyberV Kernel Probe & Process Defense KMDF Driver Package
+; Altitude: 385201 (Process Monitor & Anti-Tamper Filter)
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = SecurityDevices
+ClassGuid   = {d94ee5d8-d189-4994-83d2-f68d7d41b0e6}
+Provider    = %ManufacturerName%
+CatalogFile = CyberVProbe.cat
+DriverVer   = 09/13/2026,1.0.0.1
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 12 ; %windir%\system32\drivers
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+CyberVProbe.sys = 1,,
+
+; ================= Install section =================
+
+[Manufacturer]
+%ManufacturerName% = Standard,NTamd64
+
+[Standard.NTamd64]
+%CyberVProbe.DeviceDesc% = CyberVProbe_Device, Root\CyberVProbe
+
+[CyberVProbe_Device.NT]
+CopyFiles = Drivers_Dir
+
+[Drivers_Dir]
+CyberVProbe.sys
+
+; ================= Service installation =================
+
+[CyberVProbe_Device.NT.Services]
+AddService = CyberVProbe, %SPSVCINST_ASSOCSERVICE%, CyberVProbe_Service_Inst
+
+[CyberVProbe_Service_Inst]
+DisplayName    = %CyberVProbe.SVCDESC%
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %12%\CyberVProbe.sys
+AddReg         = CyberVProbe_Altitude_AddReg
+
+[CyberVProbe_Altitude_AddReg]
+HKR, "Instances", "DefaultInstance", 0x00000000, "CyberVProbe Instance"
+HKR, "Instances\CyberVProbe Instance", "Altitude", 0x00000000, "385201"
+HKR, "Instances\CyberVProbe Instance", "Flags", 0x00010001, 0x0
+
+; ================= Strings =================
+
+[Strings]
+SPSVCINST_ASSOCSERVICE = 0x00000002
+ManufacturerName       = "CyberV Security Corporation"
+DiskName               = "CyberV Probe Installation Disk"
+CyberVProbe.DeviceDesc = "CyberV Hardware Security Probe & Kernel Defense Driver"
+CyberVProbe.SVCDESC    = "CyberV Security Kernel Service"

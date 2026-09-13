@@ -9,9 +9,13 @@ use sha2::{Digest, Sha512};
 
 pub const DOMAIN_KERNEL_PROBE: &[u8] = b"CYBERV/DBS/KERNEL_PROBE/v1\0";
 
-// IOCTL Codes (FILE_DEVICE_UNKNOWN = 0x8000, METHOD_BUFFERED = 0, FILE_READ_DATA = 1)
-pub const IOCTL_CYBERV_GET_PCI_INFO: u32 = 0x80002000;
-pub const IOCTL_CYBERV_GET_TOPOLOGY: u32 = 0x80002004;
+// Standardized ABI IOCTL Codes (FILE_DEVICE_CYBERV = 0x8000, METHOD_BUFFERED = 0)
+// Matches driver/CyberVProbe/ioctl.h exactly
+pub const IOCTL_CYBERV_GET_PCI_INFO: u32 = 0x80006000;
+pub const IOCTL_CYBERV_GET_TOPOLOGY: u32 = 0x80006004;
+pub const IOCTL_CYBERV_REGISTER_PROTECTED_PID: u32 = 0x8000E008;
+pub const IOCTL_CYBERV_GET_SHIELD_TELEMETRY: u32 = 0x8000600C;
+pub const CYBERV_ABI_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KernelPciDevice {

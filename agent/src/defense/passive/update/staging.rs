@@ -49,7 +49,13 @@ impl UpdateStagingManager {
         is_verification_passed: bool,
     ) -> Result<UpdateStagingState, &'static str> {
         match current_state {
-            UpdateStagingState::Current => Ok(UpdateStagingState::Staged),
+            UpdateStagingState::Current => {
+                if is_verification_passed {
+                    Ok(UpdateStagingState::Staged)
+                } else {
+                    Err("Package unverified; cannot stage")
+                }
+            }
             UpdateStagingState::Staged => {
                 if is_verification_passed {
                     Ok(UpdateStagingState::Verified)

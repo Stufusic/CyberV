@@ -46,12 +46,32 @@ if (Test-Path $DashboardDist) {
     Write-Error "Không tìm thấy thư mục dashboard/dist!"
 }
 
-# 4. Sao chép các tệp cấu hình mẫu
-Copy-Item (Join-Path $RootDir ".env.example") -Destination (Join-Path $OutputDir ".env.example")
+# 4. Sao chép các kịch bản triển khai Service & Driver
+$ScriptsDir = Join-Path $OutputDir "scripts"
+New-Item -ItemType Directory -Path $ScriptsDir -Force | Out-Null
+Copy-Item (Join-Path $RootDir "scripts\install-agent-service.ps1") -Destination $ScriptsDir
+Copy-Item (Join-Path $RootDir "scripts\uninstall-agent-service.ps1") -Destination $ScriptsDir
+Copy-Item (Join-Path $RootDir "scripts\build-driver.ps1") -Destination $ScriptsDir
+Copy-Item (Join-Path $RootDir "scripts\sign-driver.ps1") -Destination $ScriptsDir
+Copy-Item (Join-Path $RootDir "scripts\install-driver.ps1") -Destination $ScriptsDir
+Copy-Item (Join-Path $RootDir "scripts\uninstall-driver.ps1") -Destination $ScriptsDir
+Write-Host "  -> Đã sao chép PowerShell deployment scripts vào release/scripts/" -ForegroundColor Green
+
+# 5. Sao chép mã nguồn Driver KMDF & Cấu hình
+$DriverOutDir = Join-Path $OutputDir "driver"
+Copy-Item (Join-Path $RootDir "driver") -Destination $OutputDir -Recurse -Force
+Write-Host "  -> Đã đóng gói driver/ vào release/driver/" -ForegroundColor Green
+
+# 6. Sao chép các tệp cấu hình mẫu
+if (Test-Path (Join-Path $RootDir ".env.example")) {
+    Copy-Item (Join-Path $RootDir ".env.example") -Destination (Join-Path $OutputDir ".env.example")
+}
 
 Write-Host "`n====================================================" -ForegroundColor Green
 Write-Host "  ĐÓNG GÓI HOÀN TẤT THÀNH CÔNG!" -ForegroundColor Green
 Write-Host "  Thư mục: $OutputDir" -ForegroundColor Green
-Write-Host "    - Core Agent Binary:  release/bin/cyberv-agent.exe" -ForegroundColor White
-Write-Host "    - Web Dashboard:      release/web/" -ForegroundColor White
+Write-Host "    - Core Agent Binary:    release/bin/cyberv-agent.exe" -ForegroundColor White
+Write-Host "    - Web Dashboard:        release/web/" -ForegroundColor White
+Write-Host "    - Deployment Scripts:   release/scripts/" -ForegroundColor White
+Write-Host "    - KMDF Kernel Driver:   release/driver/" -ForegroundColor White
 Write-Host "====================================================" -ForegroundColor Green

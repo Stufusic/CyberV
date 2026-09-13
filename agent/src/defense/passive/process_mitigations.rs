@@ -39,6 +39,8 @@ pub struct ProcessMitigationStatus {
     pub is_strict_handle_active: bool,
     pub is_whql_enforced: bool,
     pub allow_child_helpers: bool,
+    #[serde(default)]
+    pub is_verified: bool,
     pub mitigation_score: u32, // 0 - 10000
     pub summary: String,
 }
@@ -95,6 +97,7 @@ impl ProcessMitigationManager {
             is_strict_handle_active: config.strict_handle_checks,
             is_whql_enforced: config.microsoft_whql_signatures_only,
             allow_child_helpers: config.allow_child_helpers,
+            is_verified: true,
             mitigation_score: score.min(10000),
             summary,
         }

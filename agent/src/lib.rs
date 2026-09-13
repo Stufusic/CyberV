@@ -16,3 +16,4 @@ pub mod security;
 pub mod transparency;
 pub mod transport;
 pub mod trust;
+pub mod service;

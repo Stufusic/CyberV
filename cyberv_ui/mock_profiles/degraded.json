@@ -1,0 +1,38 @@
+{
+  "state": "DEGRADED",
+  "policy_decision": "DEGRADED",
+  "kernel_available": false,
+  "callback_active": false,
+  "hardware_verified": true,
+  "tpm_contradiction": false,
+  "in_recovery": false,
+  "is_ipc_connected": true,
+  "since": "08:24:10",
+  "reason": "CyberV Kernel Driver is unavailable or stopped",
+  "driver": {
+    "status": "OFFLINE",
+    "version": "Unknown",
+    "loaded_at": "N/A",
+    "callback_active": false,
+    "protected_pid": 0,
+    "blocked_terminations": 0,
+    "blocked_vm_reads": 0,
+    "blocked_vm_writes": 0,
+    "telemetry_updated_at": "Never",
+    "pci_observations_count": 0
+  },
+  "recent_events": [
+    {
+      "event_id": "EVT-88220",
+      "timestamp": "2026-09-13 08:31:00",
+      "source": "Kernel Shield",
+      "event_type": "Driver Heartbeat Timeout",
+      "severity": "CRITICAL",
+      "previous_state": "PROTECTED",
+      "current_state": "DEGRADED",
+      "trigger": "IOCTL call failed",
+      "evidence": "Error 1060 (ERROR_SERVICE_DOES_NOT_EXIST)",
+      "reason": "CyberVProbe driver service was stopped or uninstalled"
+    }
+  ]
+}

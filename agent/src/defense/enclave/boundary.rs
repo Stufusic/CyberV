@@ -5,6 +5,7 @@
 //! (Secure I/O buffer copying), bounds checking, and memory sanitization."
 
 use thiserror::Error;
+use zeroize::Zeroize;
 
 pub const MAX_SECURE_PAYLOAD_SIZE: usize = 65536; // 64 KB safe max payload
 
@@ -62,9 +63,13 @@ impl SecureIsoBuffer {
 
 impl Drop for SecureIsoBuffer {
     fn drop(&mut self) {
-        // Zero out memory to prevent cold-boot or memory dump leakage
-        for b in self.data.iter_mut() {
-            *b = 0;
+        // Guaranteed zeroization using volatile optimizer-barrier against dead-store elimination
+        self.data.zeroize();
+        if cfg!(debug_assertions) || cfg!(test) {
+            assert!(
+                self.data.iter().all(|&b| b == 0),
+                "INV-008 VIOLATION: SecureIsoBuffer memory was dropped without zeroization!"
+            );
         }
     }
 }

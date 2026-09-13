@@ -94,6 +94,21 @@ impl RecoveryManager {
         }
     }
 
+    /// Ký số thông điệp thử thách phục hồi bằng khóa riêng Ed25519 của Admin
+    pub fn sign_recovery_challenge(
+        challenge: &RecoveryChallenge,
+        signing_key: &ed25519_dalek::SigningKey,
+    ) -> String {
+        use ed25519_dalek::Signer;
+        let msg = compute_canonical_recovery_message(challenge);
+        let sig = signing_key.sign(&msg);
+        let mut s = String::with_capacity(128);
+        for b in sig.to_bytes() {
+            let _ = write!(s, "{:02x}", b);
+        }
+        s
+    }
+
     /// Xác minh bằng chứng phục hồi (Recovery Proof)
     pub fn verify_and_re_attest(
         challenge: &RecoveryChallenge,
@@ -109,7 +124,27 @@ impl RecoveryManager {
             return Err("OEM update certificate hash mismatch");
         }
 
-        // Kiểm tra chữ ký admin xác nhận re-attestation: H(challenge_id || new_pcr || admin_pubkey)
+        // Bất biến INV-003: Nếu admin_pubkey là khóa Ed25519 32-byte, thực thi kiểm tra chữ ký số bất đối xứng nghiêm ngặt
+        if admin_pubkey.len() == 32 {
+            let pubkey_bytes: [u8; 32] = admin_pubkey
+                .try_into()
+                .map_err(|_| "Invalid admin public key length")?;
+            let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&pubkey_bytes)
+                .map_err(|_| "Invalid Ed25519 public key")?;
+
+            let sig_bytes = hex_decode_64(&proof.admin_signature_sha512)
+                .ok_or("Invalid signature format (expected 64 bytes hex)")?;
+            let signature = ed25519_dalek::Signature::from_bytes(&sig_bytes);
+
+            let canonical_msg = compute_canonical_recovery_message(challenge);
+            verifying_key
+                .verify_strict(&canonical_msg, &signature)
+                .map_err(|_| "Invalid admin authorization signature (Ed25519 verification failed)")?;
+
+            return Ok(DeviceLifecycleState::ActiveAttested);
+        }
+
+        // Fallback tương thích ngược với legacy mock key (< 32 bytes)
         let mut expected_admin_hasher = Sha512::new();
         expected_admin_hasher.update(challenge.challenge_id.as_bytes());
         expected_admin_hasher.update(challenge.new_pcr_sha512.as_bytes());
@@ -130,4 +165,30 @@ impl RecoveryManager {
         // Tái xác thực thành công -> phục hồi trạng thái ActiveAttested
         Ok(DeviceLifecycleState::ActiveAttested)
     }
+}
+
+pub const DOMAIN_RECOVERY: &[u8] = b"CYBERV/RECOVERY/v1\0";
+
+pub fn compute_canonical_recovery_message(challenge: &RecoveryChallenge) -> Vec<u8> {
+    let mut msg = Vec::new();
+    msg.extend_from_slice(DOMAIN_RECOVERY);
+    msg.extend_from_slice(challenge.challenge_id.as_bytes());
+    msg.push(0);
+    msg.extend_from_slice(challenge.new_pcr_sha512.as_bytes());
+    msg.push(0);
+    msg.extend_from_slice(challenge.device_id.as_bytes());
+    msg.push(0);
+    msg.extend_from_slice(&challenge.created_at.to_le_bytes());
+    msg
+}
+
+fn hex_decode_64(hex_str: &str) -> Option<[u8; 64]> {
+    if hex_str.len() != 128 {
+        return None;
+    }
+    let mut bytes = [0u8; 64];
+    for i in 0..64 {
+        bytes[i] = u8::from_str_radix(&hex_str[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(bytes)
 }
