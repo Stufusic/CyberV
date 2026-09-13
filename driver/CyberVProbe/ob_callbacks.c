@@ -7,6 +7,8 @@
 static CYBERV_PROTECTED_PROCESS_CONTEXT g_ProtectedContext = { 0 };
 static CYBERV_SHIELD_TELEMETRY g_ShieldTelemetry = { 0 };
 
+extern LONGLONG PsGetProcessCreateTimeQuadPart(_In_ PEPROCESS Process);
+
 OB_PREOP_CALLBACK_STATUS CyberVProcessPreOperationCallback(
     _In_ PVOID RegistrationContext,
     _Inout_ POB_PRE_OPERATION_INFORMATION OperationInformation
@@ -32,6 +34,16 @@ OB_PREOP_CALLBACK_STATUS CyberVProcessPreOperationCallback(
     if (!g_ProtectedContext.IsActive || (ULONG)(ULONG_PTR)targetPid != g_ProtectedContext.ProcessId) {
         KeReleaseInStackQueuedSpinLock(&lockHandle);
         return OB_PREOP_SUCCESS;
+    }
+
+    // Anti-PID Reuse Enforcement: Verify process creation time matches registered process
+    if (g_ProtectedContext.ProcessStartTime != 0) {
+        LONGLONG currentCreateTime = PsGetProcessCreateTimeQuadPart(targetProcess);
+        if ((ULONGLONG)currentCreateTime != g_ProtectedContext.ProcessStartTime) {
+            // OS recycled the PID for another process -> do not protect foreign process!
+            KeReleaseInStackQueuedSpinLock(&lockHandle);
+            return OB_PREOP_SUCCESS;
+        }
     }
 
     KeReleaseInStackQueuedSpinLock(&lockHandle);

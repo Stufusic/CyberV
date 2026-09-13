@@ -12,5 +12,7 @@ pub use cross_validator::{
     CrossLayerValidationReport, CrossLayerValidator, ValidationStatus, KERNEL_DERIVATION_VERSION,
 };
 pub use protocol::{
-    KernelObservationPayload, KernelPciDevice, IOCTL_CYBERV_GET_PCI_INFO, IOCTL_CYBERV_GET_TOPOLOGY,
+    KernelObservationPayload, KernelPciDevice, KernelShieldTelemetry,
+    IOCTL_CYBERV_GET_PCI_INFO, IOCTL_CYBERV_GET_TOPOLOGY,
+    IOCTL_CYBERV_REGISTER_PROTECTED_PID, IOCTL_CYBERV_GET_SHIELD_TELEMETRY,
 };

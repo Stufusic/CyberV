@@ -40,10 +40,8 @@ __pycache__/
 *$py.class
 .pytest_cache/
 
-# Excluded per User Instruction (Khong up test va folder Docs len GitHub)
+# Excluded Internal Documentation & Release artifacts
 Docs/
-tests/
-agent/tests/
-database/tests/
 release/
+
 

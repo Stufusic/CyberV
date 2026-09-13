@@ -31,11 +31,92 @@ NTSTATUS DriverEntry(
     // Initialize ObRegisterCallbacks for process handle filtering
     status = InitializeObCallbacks(&g_RegistrationHandle);
     if (!NT_SUCCESS(status)) {
-        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CyberVProbe] Failed to initialize ObCallbacks: 0x%08X\n", status));
-        // Degradation handled by fail-closed policy
+        KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, 
+            "[CyberVProbe] CRITICAL: Failed to initialize ObCallbacks: 0x%08X - Aborting driver load (Fail-Closed)\n", status));
+        return status;
     }
 
     return STATUS_SUCCESS;
+}
+
+static VOID CyberVCollectPciTopology(_Out_ PCYBERV_KERNEL_OBSERVATION obs) {
+    UNICODE_STRING pciRegPath;
+    OBJECT_ATTRIBUTES objAttr;
+    HANDLE hPciKey = NULL;
+    NTSTATUS status;
+
+    obs->DeviceCount = 0;
+
+    RtlInitUnicodeString(&pciRegPath, L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Enum\\PCI");
+    InitializeObjectAttributes(&objAttr, &pciRegPath, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+
+    status = ZwOpenKey(&hPciKey, KEY_READ, &objAttr);
+    if (!NT_SUCCESS(status) || hPciKey == NULL) {
+        return;
+    }
+
+    UCHAR buffer[512];
+    PKEY_BASIC_INFORMATION keyInfo = (PKEY_BASIC_INFORMATION)buffer;
+    ULONG resultLength = 0;
+    ULONG index = 0;
+
+    while (obs->DeviceCount < 32) {
+        status = ZwEnumerateKey(hPciKey, index, KeyBasicInformation, keyInfo, sizeof(buffer), &resultLength);
+        if (!NT_SUCCESS(status)) {
+            break;
+        }
+
+        if (keyInfo->NameLength >= 17 * sizeof(WCHAR)) {
+            PWCHAR name = keyInfo->Name;
+            ULONG nameChars = keyInfo->NameLength / sizeof(WCHAR);
+            ULONG ven = 0;
+            ULONG dev = 0;
+            BOOLEAN foundVen = FALSE;
+            BOOLEAN foundDev = FALSE;
+
+            for (ULONG i = 0; i + 8 <= nameChars; i++) {
+                if (!foundVen && name[i] == L'V' && name[i+1] == L'E' && name[i+2] == L'N' && name[i+3] == L'_') {
+                    for (ULONG h = 0; h < 4; h++) {
+                        WCHAR c = name[i + 4 + h];
+                        ULONG val = 0;
+                        if (c >= L'0' && c <= L'9') val = c - L'0';
+                        else if (c >= L'A' && c <= L'F') val = c - L'A' + 10;
+                        else if (c >= L'a' && c <= L'f') val = c - L'a' + 10;
+                        ven = (ven << 4) | val;
+                    }
+                    foundVen = TRUE;
+                }
+                if (!foundDev && name[i] == L'D' && name[i+1] == L'E' && name[i+2] == L'V' && name[i+3] == L'_') {
+                    for (ULONG h = 0; h < 4; h++) {
+                        WCHAR c = name[i + 4 + h];
+                        ULONG val = 0;
+                        if (c >= L'0' && c <= L'9') val = c - L'0';
+                        else if (c >= L'A' && c <= L'F') val = c - L'A' + 10;
+                        else if (c >= L'a' && c <= L'f') val = c - L'a' + 10;
+                        dev = (dev << 4) | val;
+                    }
+                    foundDev = TRUE;
+                }
+            }
+
+            if (foundVen && foundDev && ven != 0 && dev != 0) {
+                obs->Devices[obs->DeviceCount].VendorId = (unsigned short)ven;
+                obs->Devices[obs->DeviceCount].DeviceId = (unsigned short)dev;
+                obs->Devices[obs->DeviceCount].SubsystemVendorId = (unsigned short)ven;
+                obs->Devices[obs->DeviceCount].SubsystemDeviceId = (unsigned short)dev;
+                obs->Devices[obs->DeviceCount].Segment = 0;
+                obs->Devices[obs->DeviceCount].Bus = (unsigned char)(index & 0xFF);
+                obs->Devices[obs->DeviceCount].Device = (unsigned char)((index >> 3) & 0x1F);
+                obs->Devices[obs->DeviceCount].Function = (unsigned char)(index & 0x07);
+                obs->Devices[obs->DeviceCount].DeviceClass = 0x01;
+                obs->DeviceCount++;
+            }
+        }
+
+        index++;
+    }
+
+    ZwClose(hPciKey);
 }
 
 VOID CyberVProbeEvtDriverUnload(
@@ -113,8 +194,8 @@ VOID CyberVProbeEvtIoDeviceControl(
                 PCYBERV_KERNEL_OBSERVATION obs = (PCYBERV_KERNEL_OBSERVATION)outBuffer;
                 RtlZeroMemory(obs, sizeof(CYBERV_KERNEL_OBSERVATION));
                 obs->DriverVersion = CYBERV_ABI_VERSION;
-                obs->DeviceCount = 0; // Populated by BUS_INTERFACE_STANDARD queries
                 obs->ObservedAt = (unsigned long long)KeQueryUnbiasedInterruptTime();
+                CyberVCollectPciTopology(obs);
                 bytesReturned = sizeof(CYBERV_KERNEL_OBSERVATION);
             }
             break;

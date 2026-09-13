@@ -87,3 +87,16 @@ fn compute_kernel_commitment(
     hasher.update(encoder.to_canonical_bytes());
     format!("{:x}", hasher.finalize())
 }
+
+/// Telemetry từ Shield Driver (Ring-0)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct KernelShieldTelemetry {
+    pub protected_pid: u32,
+    pub blocked_terminations: u32,
+    pub blocked_vm_reads: u32,
+    pub blocked_vm_writes: u32,
+    pub suspicious_attempts: u32,
+    pub driver_unload_attempts: u32,
+    pub is_shield_active: bool,
+}
+

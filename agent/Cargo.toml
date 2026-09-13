@@ -36,6 +36,8 @@ keyring = "3.0"
 windows-sys = { version = "0.52", features = [
     "Win32_Security_Cryptography",
     "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
     "Win32_System_Memory",
     "Win32_System_Services",
 ] }
