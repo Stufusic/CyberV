@@ -12,7 +12,7 @@
 
 **Nền tảng xác thực định danh thiết bị và phòng vệ điểm cuối gắn chặt phần cứng (Hardware-Anchored Device Identity & Endpoint Trust) thế hệ mới dành cho Windows.**
 
-[Kiến Trúc](#1-kiến-trúc-tổng-thể) • [Tính Năng Cốt Lõi](#2-các-tính-năng-kỹ-thuật-cốt-lõi) • [Bất Biến An Ninh](#3-ma-trận-bất-biến-an-ninh-core-invariants) • [Khởi Chạy Nhanh](#4-hướng-dẫn-cài-đặt--vận-hành) • [Desktop Native UI](#5-giao-diện-máy-trạm-độc-lập-cyberv-uiexe) • [Dịch Vụ Windows SCM](#6-quản-trị-windows-service) • [Driver Kernel](#7-quy-trình-biên-dịch--ký-số-driver) • [Bảo Mật & Đóng Góp](#10-chính-sách-bảo-mật--đóng-góp)
+[Kiến Trúc](#1-kiến-trúc-tổng-thể) • [Tính Năng Cốt Lõi](#2-các-tính-năng-kỹ-thuật-cốt-lõi) • [Bất Biến An Ninh](#3-ma-trận-bất-biến-an-ninh-core-invariants) • [Tải Về & Khởi Chạy Nhanh](#4-hướng-dẫn-tải-về--khởi-chạy-nhanh-download--quick-start) • [Desktop Native UI](#5-giao-diện-máy-trạm-độc-lập-cyberv-uiexe) • [Dịch Vụ Windows SCM](#6-quản-trị-windows-service) • [Driver Kernel](#7-quy-trình-biên-dịch--ký-số-driver) • [Bảo Mật & Đóng Góp](#10-chính-sách-bảo-mật--đóng-góp)
 
 </div>
 
@@ -118,29 +118,88 @@ Hệ thống được thiết kế xoay quanh 8 bất biến an ninh nền tản
 
 ---
 
-## 4. Hướng Dẫn Cài Đặt & Vận Hành
+## 4. Hướng Dẫn Tải Về & Khởi Chạy Nhanh (Download & Quick Start)
 
-### 4.1. Tiền Đề Môi Trường (Prerequisites)
-* **Hệ điều hành**: Windows 10 (1909+ 64-bit), Windows 11 (64-bit), hoặc Windows Server 2019/2022/2025.
-* **Rust Toolchain**: 1.75.0+ (`x86_64-pc-windows-msvc`).
-* **Visual Studio Build Tools**: VS 2022 C++ Build Tools và Windows 10/11 SDK.
-* **Node.js**: LTS 18+ & npm (để chạy Web Dashboard).
-* **PowerShell**: 5.1 hoặc PowerShell 7+.
+CyberV hỗ trợ hai phương thức triển khai phù hợp cho cả **người dùng cuối** lẫn **nhà phát triển**:
 
-### 4.2. Khởi Chạy Nhanh CyberV Agent (Chế Độ Tương Tác)
+```text
+                                BẠN MUỐN DÙNG THEO CÁCH NÀO?
+                                              │
+                     ┌────────────────────────┴────────────────────────┐
+                     ▼                                                 ▼
+        [NGƯỜI DÙNG CUỐI / ĐÁNH GIÁ NHANH]               [NHÀ PHÁT TRIỂN / SEC-OPS]
+         Tải bản Portable .ZIP đóng gói sẵn               Clone mã nguồn từ GitHub & build
+         Không cần cài đặt Python / Rust                   Toàn quyền tùy biến và mở rộng
+                     │                                                 │
+                     ▼                                                 ▼
+        Tải CyberV-UI.exe từ Releases                     git clone https://github.com/Stufusic/CyberV.git
+        Nhấp đúp chuột và sử dụng ngay                    pip install / cargo build / npm run dev
+```
+
+---
+
+### 4.1. Phương Án 1: Dành Cho Người Dùng Cuối (Tải Về & Dùng Ngay — Không Cần Cài Code)
+
+Nếu bạn chỉ muốn đánh giá an ninh thiết bị, kiểm tra phần cứng hoặc giám sát điểm cuối trên máy trạm của mình:
+
+1. **Tải tệp nén phát hành:**
+   Truy cập mục [**Releases trên GitHub**](https://github.com/Stufusic/CyberV/releases) và tải bản mới nhất:
+   👉 **`CyberV-UI-v1.0.0-win64.zip`** *(Bản nhị phân độc lập chạy trực tiếp trên Windows 10/11 x64)*.
+2. **Giải nén:**
+   Giải nén tệp `.zip` vào một thư mục trên máy tính của bạn (ví dụ: `C:\CyberV\` hoặc thư mục cá nhân).
+3. **Khởi chạy ứng dụng:**
+   Nhấp đúp chuột vào file **`CyberV-UI.exe`**.
+   * Ứng dụng sẽ mở ngay lập tức trong vòng 1 giây, **hoàn toàn không đòi hỏi cài đặt Python hay bất kỳ thư viện nào**.
+   * Hệ thống tự động thu thập và hiển thị chính xác vi xử lý (CPU), dung lượng RAM, tên mã Bo mạch chủ và trạng thái chip TPM 2.0 của máy tính bạn.
+4. **Bật chế độ bảo vệ 24/7 (Tùy chọn):**
+   Nếu muốn kích hoạt Dịch vụ nền Windows Service chạy liên tục cùng hệ điều hành, tại trang **TỔNG QUAN**, bạn chỉ cần bấm nút:
+   > **`[🚀 Kích Hoạt Bảo Vệ Ngầm 24/7 (Windows Service)]`**
+   Khi Windows hiển thị hộp thoại UAC hỏi quyền Quản trị viên, hãy chọn **Yes**.
+
+---
+
+### 4.2. Phương Án 2: Dành Cho Nhà Phát Triển & Kỹ Sư An Ninh (Biên Dịch Từ Mã Nguồn)
+
+Nếu bạn muốn đóng góp mã nguồn, kiểm toán thuật toán hoặc tự đóng gói hệ thống:
+
+#### 1. Tiền đề môi trường (Prerequisites)
+* **Hệ điều hành**: Windows 10 (1909+ 64-bit), Windows 11 (64-bit).
+* **Python**: 3.10+ (Khuyến nghị 3.11 hoặc 3.13) kèm `pip`.
+* **Rust**: 1.75+ Stable (`x86_64-pc-windows-msvc`).
+* **Visual Studio 2022**: Workload *"Desktop development with C++"* kèm Windows SDK (nếu muốn build Driver).
+* **Node.js**: LTS 18+ & npm (nếu muốn chạy Web Dashboard).
+
+#### 2. Clone mã nguồn
 ```powershell
-# Chạy trực tiếp Agent để quan sát phần cứng và xây dựng đồ thị topo:
-cd "c:\New PJ\CyberV\agent"
+git clone https://github.com/Stufusic/CyberV.git
+cd CyberV
+```
+
+#### 3. Chạy Giao Diện Desktop Native (Python / PySide6)
+```powershell
+# Cài đặt thư viện:
+pip install -r cyberv_ui/requirements.txt
+
+# Khởi chạy giao diện máy trạm:
+python -m cyberv_ui.main
+
+# Tự đóng gói thành file CyberV-UI.exe độc lập:
+powershell -ExecutionPolicy Bypass -File scripts\build-ui.ps1
+```
+
+#### 4. Khởi chạy Core Agent (Rust)
+```powershell
+cd agent
 cargo run --bin cyberv-agent -- run
 ```
 
-### 4.3. Khởi Chạy Web Dashboard
+#### 5. Khởi chạy Web Dashboard Hạm Đội (React / Vite)
 ```powershell
-cd "c:\New PJ\CyberV\dashboard"
+cd dashboard
 npm install
 npm run dev
 ```
-Truy cập giao diện tại: **`http://localhost:5173`**
+Truy cập giao diện Web tại: **`http://localhost:5173`**
 
 ---
 
