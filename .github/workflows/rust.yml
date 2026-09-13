@@ -1,0 +1,45 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-and-test:
+    name: Build & Test (Windows x64)
+    # BẮT BUỘC: CyberV phụ thuộc vào Windows APIs (SCM, DPAPI, Named Pipe, WMI)
+    runs-on: windows-latest
+
+    steps:
+      # 1. Tải mã nguồn về Runner
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Thiết lập Rust Toolchain bản Stable x86_64-pc-windows-msvc
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # 3. Tự động Cache các Crates và bản build để CI chạy cực nhanh
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      # 4. Kiểm tra cú pháp và kiểu dữ liệu toàn bộ Workspace
+      - name: Cargo Check
+        run: cargo check --workspace --verbose
+
+      # 5. Biên dịch toàn bộ các binary (Debug mode)
+      - name: Build Debug
+        run: cargo build --workspace --verbose
+
+      # 6. Biên dịch bản tối ưu hóa Release (kiểm tra khả năng đóng gói)
+      - name: Build Release
+        run: cargo build --workspace --release --verbose
+
+      # 7. Chạy toàn bộ các bài kiểm thử tự động
+      - name: Run Tests
+        run: cargo test --workspace --verbose
