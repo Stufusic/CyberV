@@ -12,7 +12,7 @@
 
 **Nền tảng xác thực định danh thiết bị và phòng vệ điểm cuối gắn chặt phần cứng (Hardware-Anchored Device Identity & Endpoint Trust) thế hệ mới dành cho Windows.**
 
-[Kiến Trúc](#1-kiến-trúc-tổng-thể) • [Tính Năng Cốt Lõi](#2-các-tính-năng-kỹ-thuật-cốt-lõi) • [Bất Biến An Ninh](#3-ma-trận-bất-biến-an-ninh-core-invariants) • [Tải Về & Khởi Chạy Nhanh](#4-hướng-dẫn-tải-về--khởi-chạy-nhanh-download--quick-start) • [Desktop Native UI](#5-giao-diện-máy-trạm-độc-lập-cyberv-uiexe) • [Dịch Vụ Windows SCM](#6-quản-trị-windows-service) • [Driver Kernel](#7-quy-trình-biên-dịch--ký-số-driver) • [Bảo Mật & Đóng Góp](#10-chính-sách-bảo-mật--đóng-góp)
+[Kiến Trúc](#1-kiến-trúc-tổng-thể) • [Tính Năng Cốt Lõi](#2-các-tính-năng-kỹ-thuật-cốt-lõi) • [Bất Biến An Ninh](#3-ma-trận-bất-biến-an-ninh-core-invariants) • [Tải Về & Khởi Chạy Nhanh](#4-hướng-dẫn-tải-về--khởi-chạy-nhanh-download--quick-start) • [Desktop Native UI](#5-giao-diện-máy-trạm-độc-lập-cyberv-uiexe) • [Dịch Vụ Windows SCM](#6-quản-trị-windows-service) • [Driver Kernel](#7-quy-trình-biên-dịch--ký-số-driver) • [Giới Hạn & Lộ Trình](#10-giới-hạn-hiện-tại--lộ-trình-nghiên-cứu-current-limitations--research-roadmap) • [Bảo Mật & Đóng Góp](#11-chính-sách-bảo-mật--đóng-góp)
 
 </div>
 
@@ -427,14 +427,45 @@ CyberV/
 
 ---
 
-## 10. Chính Sách Bảo Mật & Đóng Góp
+## 10. Giới Hạn Hiện Tại & Lộ Trình Nghiên Cứu (Current Limitations & Research Roadmap)
+
+Dự án **CyberV** được định vị là **Nền tảng kiến trúc an ninh mã nguồn mở (Open-Source Hardware-Anchored Endpoint Trust & Anti-Tamper Framework)** và bản mẫu kỹ thuật chuyên sâu (Working Systems Security Prototype). Nhằm đảm bảo tính minh bạch học thuật và kỹ thuật đối với cộng đồng nghiên cứu an ninh mạng, các giới hạn hiện tại của dự án được công bố rõ ràng kèm theo lộ trình nghiên cứu mở rộng:
+
+### 10.1. Các Giới Hạn Kỹ Thuật Hiện Tại (Current Limitations)
+
+1. **Kernel PCI Hardware Enumeration:**
+   * *Hiện trạng:* Trình điều khiển `CyberVProbe.sys` hiện thu thập danh sách thiết bị PCI an toàn thông qua nhánh PnP Kernel Registry (`\Registry\Machine\SYSTEM\CurrentControlSet\Enum\PCI`). Cơ chế này đảm bảo an toàn tuyệt đối (Zero BSOD risk) nhưng vẫn là lớp trừu tượng phía trên của PnP Manager.
+   * *Giới hạn:* Chưa gửi `IRP_MN_QUERY_INTERFACE` với `GUID_BUS_INTERFACE_STANDARD` trực tiếp xuống PCI Bus Driver PDO hoặc đọc PCI Configuration Space trực tiếp qua ACPI/HAL.
+2. **Phạm vi Phòng thủ Điểm cuối (Scope of Defense):**
+   * *Hiện trạng:* CyberV tập trung chuyên sâu vào **Hardware-Anchored Identity, Anti-Rollback (TPM 2.0 NV Counter), và Anti-Tamper Shield (ObRegisterCallbacks chống kill/scrape tiến trình Agent)**.
+   * *Giới hạn:* CyberV **không phải** là một EDR thương mại đầy đủ (như CrowdStrike Falcon hay Microsoft Defender for Endpoint). Dự án hiện chưa tích hợp ELAM (Early Launch Anti-Malware), Windows Filtering Platform (WFP Network Callout), hay File System Minifilter Driver.
+3. **Ký số Trình điều khiển (Kernel Driver Signing):**
+   * *Hiện trạng:* Driver `CyberVProbe.sys` hiện được ký bằng Chứng chỉ Tự ký (Self-Signed Test Certificate) phục vụ môi trường R&D.
+   * *Giới hạn:* Để nạp trên Windows 64-bit production bắt buộc phải bật `TESTSIGNING ON`. Việc triển khai thương mại diện rộng đòi hỏi chứng chỉ EV Code Signing và chứng thực Microsoft WHQL (Windows Hardware Quality Labs).
+4. **Ma trận Kiểm thử Đa Phiên bản Windows (Multi-Build Validation Matrix):**
+   * *Hiện trạng:* Đã kiểm chứng ổn định trên môi trường thử nghiệm Windows 10/11 x64.
+   * *Giới hạn:* Chưa có ma trận kiểm thử độc lập tự động trên diện rộng (tất cả các bản build từ Windows 10 1809 đến Windows 11 24H2 bật VBS/HVCI mặc định và Windows Server 2022).
+5. **Kiểm thử Rung Lắc IOCTL (Kernel Boundary Fuzzing):**
+   * *Hiện trạng:* Đã vượt qua các bài kiểm thử unit/adversarial in-process fuzzing với các buffer dị dạng, sai kích thước, saturation và con trỏ rác.
+   * *Giới hạn:* Chưa trải qua các chiến dịch fuzzing kernel dài hạn chuyên dụng (như Google Syzkaller hoặc kAFL) trong môi trường ảo hóa hypervisor 48h+.
+
+### 10.2. Lộ Trình Nghiên Cứu & Phát Triển (Research Roadmap)
+
+- [ ] **v1.1 (Ngắn hạn):** Nâng cấp thu thập PCI qua `BUS_INTERFACE_STANDARD` trực tiếp tại tầng bus driver KMDF.
+- [ ] **v1.2 (Trung hạn):** Tích hợp Syzkaller test harness và mở rộng bộ fuzzing ma trận IOCTL vào luồng CI/CD.
+- [ ] **v1.3 (Trung hạn):** Bổ sung File System Minifilter cơ bản để bảo vệ tệp vault cục bộ dưới tầng Ring-0.
+- [ ] **v2.0 (Dài hạn):** Đăng ký WHQL Attestation và tích hợp cơ chế cô lập nhân dựa trên VBS (Virtualization-Based Security / Enclave).
+
+---
+
+## 11. Chính Sách Bảo Mật & Đóng Góp
 
 * **Báo cáo Lỗ hổng:** Vui lòng tham khảo [**`SECURITY.md`**](SECURITY.md) để gửi báo cáo bảo mật riêng tư đến ban quản trị thay vì mở Public Issue.
 * **Đóng góp Mã nguồn (Contributing):** Mọi đóng góp Pull Request bắt buộc phải vượt qua toàn bộ test suite (`cargo test`) và không được vi phạm bất kỳ bất biến an ninh nào (INV-001 đến INV-008).
 
 ---
 
-## 11. Giấy Phép & Tuyên Bố Miễn Trừ Trách Nhiệm (License & Legal Disclaimer)
+## 12. Giấy Phép & Tuyên Bố Miễn Trừ Trách Nhiệm (License & Legal Disclaimer)
 
 Dự án CyberV được phát hành theo giấy phép mã nguồn mở **[Apache License 2.0](LICENSE)**.
 
