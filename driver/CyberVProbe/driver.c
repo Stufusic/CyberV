@@ -208,11 +208,21 @@ VOID CyberVProbeEvtIoDeviceControl(
             status = WdfRequestRetrieveInputBuffer(Request, sizeof(CYBERV_PROTECTED_PROCESS_REGISTRATION), &inBuffer, NULL);
             if (NT_SUCCESS(status) && inBuffer != NULL) {
                 PCYBERV_PROTECTED_PROCESS_REGISTRATION reg = (PCYBERV_PROTECTED_PROCESS_REGISTRATION)inBuffer;
-                
-                // Caller identity verification: Ensure registration can only be requested
-                // for the caller's own PID or by SYSTEM
+
+                // ABI anti-drift: reject clients built against a different ABI version
+                if (reg->ClientAbiVersion != CYBERV_ABI_VERSION) {
+                    status = STATUS_REVISION_MISMATCH;
+                    break;
+                }
+
+                // Caller identity verification: registration is only allowed for
+                // the caller's OWN PID. The former "PID 4 = System" bypass also
+                // admitted any kernel-thread-originated (Zw*) request and has no
+                // legitimate use: the CyberVAgent service runs in its own process.
+                // NOTE: this IOCTL completes inline (never pended), so the current
+                // thread still belongs to the requesting process.
                 ULONG callerPid = (ULONG)(ULONG_PTR)PsGetCurrentProcessId();
-                if (callerPid != reg->ProcessId && callerPid != 4) { // PID 4 is System
+                if (callerPid != reg->ProcessId) {
                     status = STATUS_ACCESS_DENIED;
                     break;
                 }

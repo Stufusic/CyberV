@@ -50,4 +50,12 @@ OB_PREOP_CALLBACK_STATUS CyberVProcessPreOperationCallback(
     _Inout_ POB_PRE_OPERATION_INFORMATION OperationInformation
 );
 
+// Pre-operation callback routine for thread handle creation/duplication
+// (blocks TerminateThread/SuspendThread/SetThreadContext against the
+// protected agent's threads - a process-handle mask alone cannot block these)
+OB_PREOP_CALLBACK_STATUS CyberVThreadPreOperationCallback(
+    _In_ PVOID RegistrationContext,
+    _Inout_ POB_PRE_OPERATION_INFORMATION OperationInformation
+);
+
 #endif // CYBERV_OB_CALLBACKS_H

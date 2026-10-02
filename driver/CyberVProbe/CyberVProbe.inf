@@ -34,6 +34,15 @@ CyberVProbe.sys = 1,,
 [CyberVProbe_Device.NT]
 CopyFiles = Drivers_Dir
 
+; KMDF binding (WdfDriverCreate trong DriverEntry yeu cau binding nay):
+; khong co KmdfService, KMDF loader khong the bind service voi client driver
+; va WdfDriverCreate se fail khi nap -> driver khong the khoi dong qua INF.
+[CyberVProbe_Device.NT.Wdf]
+KmdfService = CyberVProbe, CyberVProbe_wdfsect
+
+[CyberVProbe_wdfsect]
+KmdfLibraryVersion = 1.15
+
 [Drivers_Dir]
 CyberVProbe.sys
 

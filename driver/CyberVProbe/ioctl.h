@@ -49,9 +49,10 @@ typedef struct _CYBERV_KERNEL_OBSERVATION {
 
 typedef struct _CYBERV_PROTECTED_PROCESS_REGISTRATION {
     unsigned int ProcessId;
-    unsigned long long ProcessStartTime;
+    unsigned long long ProcessStartTime;    // FILETIME (100ns tu 1601) - cung he quy chieu voi PsGetProcessCreateTimeQuadPart
     char RegistrationNonce[64];
     unsigned int DriverInstanceId;
+    unsigned long long ClientAbiVersion;    // Phai bang CYBERV_ABI_VERSION - driver tu choi neu lech (anti ABI drift)
 } CYBERV_PROTECTED_PROCESS_REGISTRATION, *PCYBERV_PROTECTED_PROCESS_REGISTRATION;
 
 typedef struct _CYBERV_SHIELD_TELEMETRY {
