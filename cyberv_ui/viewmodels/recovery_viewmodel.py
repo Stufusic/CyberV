@@ -44,15 +44,31 @@ class RecoveryViewModel(BaseViewModel):
 
     def submit_recovery_signature(self, signature_hex: str):
         self.set_loading(True)
-        # Validate hex signature format
+        # Validate hex signature format (độ dài + bộ ký tự hex thực sự)
         cleaned = (signature_hex or "").strip()
         if len(cleaned) != 128:  # 64 bytes = 128 hex chars for Ed25519 signature
             self.set_loading(False)
             self.recovery_result.emit(False, "Invalid Ed25519 signature length (expected 128 hex characters).")
             return
+        try:
+            bytes.fromhex(cleaned)
+        except ValueError:
+            self.set_loading(False)
+            self.recovery_result.emit(False, "Signature contains non-hex characters.")
+            return
 
-        # Simulating or forwarding to Core Agent IPC
+        # TRUNG THỰC (FIX F1): UI KHÔNG giữ khóa xác minh Ed25519 và IPC hiện
+        # chưa có lệnh verify recovery — UI tuyệt đối không được tự tuyên bố
+        # "đã phục hồi / PROTECTED" chỉ vì chuỗi ký tự đủ 128 ký tự (đường cũ
+        # vi phạm INV-003 và nguyên tắc Zero Deceptive Signals). Chữ ký được
+        # ghi nhận ở trạng thái chờ xử lý; chỉ Core Agent (giữ verifying key
+        # qua IPC) mới được xác nhận chuyển trạng thái.
         self.set_loading(False)
-        self._current_state = "NORMAL"
-        self.recovery_result.emit(True, "Recovery attestation signature accepted. Device restored to PROTECTED state.")
+        self._current_state = "PENDING_VERIFICATION"
+        self.recovery_result.emit(
+            False,
+            "Signature format accepted but NOT yet verified. The Core Agent must "
+            "validate it against the recovery challenge before the device can "
+            "return to a protected state. (Forwarding channel pending in Phase 1.)",
+        )
         self.state_updated.emit()

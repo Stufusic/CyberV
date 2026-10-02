@@ -8,6 +8,7 @@ import ctypes
 import os
 import sys
 import time
+import uuid
 from typing import Any, Dict, Optional, Union
 
 from .protocol import (
@@ -87,9 +88,15 @@ class NamedPipeClient:
 
     def _verify_handshake(self) -> bool:
         """Sends Handshake challenge to verify server identity and protocol version."""
-        envelope = IpcMessageEnvelope.create_handshake()
+        # FIX F2: client sinh nonce riêng và BẮT BUỘC kiểm tra server echo lại
+        # đúng giá trị — một phản hồi HANDSHAKE_OK ghi sẵn/phản ánh mù không
+        # còn được tính là đã xác thực.
+        handshake_nonce = uuid.uuid4().hex
+        envelope = IpcMessageEnvelope.create_handshake(nonce_hex=handshake_nonce)
         resp = self._raw_send_envelope(envelope)
         if resp.success and resp.data and resp.data.get("status") == "HANDSHAKE_OK":
+            if resp.data.get("nonce_echo") != handshake_nonce:
+                return False
             self.is_authenticated = True
             return True
         return False

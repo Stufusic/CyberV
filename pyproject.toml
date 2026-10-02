@@ -1,0 +1,5 @@
+# Pytest root configuration: cho phép chạy `pytest`/`python -m pytest` từ MỌI
+# thư mục trong repo (trước đây chạy từ trong cyberv_ui/ gặp ModuleNotFoundError).
+[tool.pytest.ini_options]
+testpaths = ["cyberv_ui/tests"]
+pythonpath = ["."]

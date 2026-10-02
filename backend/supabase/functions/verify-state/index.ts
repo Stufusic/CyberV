@@ -5,6 +5,7 @@ import {
   verifyEd25519ChallengeSignature,
 } from "../_shared/crypto.ts";
 import { PURPOSE_DEVICE_AUTH } from "../_shared/protocol.ts";
+import { checkRateLimit, rateLimitHeaders } from "../_shared/rate_limiter.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -61,6 +62,19 @@ serve(async (req) => {
       Deno.env.get("SUPABASE_URL") ?? "",
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
     );
+
+    // 1b. Per-device rate limit (verify-state previously had NO limit at all)
+    const rateCheck = checkRateLimit(`verify-state:${device_id}`, 30, 60);
+    if (!rateCheck.allowed) {
+      return new Response(JSON.stringify({ error: "Rate limit exceeded" }), {
+        status: 429,
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "application/json",
+          ...rateLimitHeaders(rateCheck),
+        },
+      });
+    }
 
     // 2. Fetch device record
     const { data: device, error: devError } = await adminClient
@@ -138,9 +152,12 @@ serve(async (req) => {
     }
 
     // 5. Atomically consume challenge via SQL function
+    // FIX: function signature is consume_challenge_atomic(p_device_id, p_nonce) --
+    // the former p_challenge_id argument did not exist, so PostgREST rejected
+    // every call (PGRST202) and the whole device-auth flow failed post-signature.
     const { data: consumeSuccess, error: consumeError } = await adminClient.rpc(
       "consume_challenge_atomic",
-      { p_challenge_id: challenge_id, p_nonce: nonce }
+      { p_device_id: device_id, p_nonce: nonce }
     );
 
     if (consumeError || !consumeSuccess) {

@@ -145,10 +145,13 @@ class IpcResponseEnvelope:
             data = json.loads(raw_bytes.decode("utf-8"))
             return cls(
                 message_id=data.get("message_id", ""),
-                success=bool(data.get("success", False)),
+                # FIX F8: bool("false") == True - chuoi "false" phai KHONG duoc
+                # tinh la thanh cong. Chi boolean True chan thuc moi hop le.
+                success=data.get("success") is True,
                 data=data.get("data"),
                 error=data.get("error"),
-                timestamp=data.get("timestamp", int(time.time())),
+                # Khong tu che ra timestamp hien tai - thieu du lieu phai la 0
+                timestamp=data.get("timestamp", 0),
             )
         except Exception as e:
             raise DeserializationError(f"Failed to parse IPC response: {e}") from e

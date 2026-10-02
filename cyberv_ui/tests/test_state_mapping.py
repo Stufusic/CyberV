@@ -118,10 +118,39 @@ class TestStateMapping(unittest.TestCase):
         self.assertEqual(res.confidence, "HIGH")
 
     def test_golden_rule_unknown_and_degraded_not_protected(self):
-        """Zero Deceptive Signals: UNKNOWN != PROTECTED and DEGRADED != PROTECTED."""
+        """Zero Deceptive Signals: UNKNOWN != PROTECTED and DEGRADED != PROTECTED.
+
+        PHIÊN BẢN CŨ LÀ TAUTOLOGY (assert các enum khác nhau — không bao giờ fail).
+        Giờ kiểm chứng bất biến thật qua gatekeeper: mọi tổ hợp dữ liệu thiếu/
+        mờ nhạt KHÔNG ĐƯỢC trả về PROTECTED.
+        """
         self.assertNotEqual(ProtectionState.UNKNOWN, ProtectionState.PROTECTED)
         self.assertNotEqual(ProtectionState.DEGRADED, ProtectionState.PROTECTED)
         self.assertNotEqual(ProtectionState.ISOLATED, ProtectionState.PROTECTED)
+
+        # Bất biến thật: thiếu bất kỳ điều kiện bảo vệ nào -> không bao giờ PROTECTED
+        scenarios_never_protected = [
+            # (kernel_available, callback_active, policy_decision, hardware_verified, is_ipc_connected)
+            (False, True, "PROTECT", True, True),    # không driver
+            (True, False, "PROTECT", True, True),    # callback không chạy
+            (True, True, "UNKNOWN", True, True),     # policy không rõ
+            (True, True, "PROTECT", False, True),    # hardware chưa verify
+            (True, True, "PROTECT", True, False),    # mất kết nối IPC
+            (False, False, "UNKNOWN", False, False), # mọi thứ mờ nhạt
+        ]
+        for (k, cb, pol, hw, ipc) in scenarios_never_protected:
+            res = resolve_display_state(
+                kernel_available=k,
+                callback_active=cb,
+                policy_decision=pol,
+                hardware_verified=hw,
+                is_ipc_connected=ipc,
+            )
+            self.assertNotEqual(
+                res.state,
+                ProtectionState.PROTECTED,
+                f"FAIL-CLOSED VIOLATION với inputs ({k}, {cb}, {pol!r}, {hw}, {ipc})",
+            )
 
 
 if __name__ == "__main__":

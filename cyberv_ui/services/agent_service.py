@@ -178,8 +178,10 @@ class AgentServiceProvider(QObject):
         ks_data = data.get("kernel_shield", {})
         kernel_avail = bool(ks_data.get("is_active", False))
         cb_active = bool(ks_data.get("cross_validator_active", False))
-        pol_dec = prot_data.get("policy_decision", "PROTECT")
-        hw_ver = bool(prot_data.get("hardware_verified", True))
+        # FIX F3: default fail-closed - thieu du lieu tu agent phai la
+        # UNKNOWN/False, tuyet doi khong duoc gia dinh "da bao ve".
+        pol_dec = prot_data.get("policy_decision", "UNKNOWN")
+        hw_ver = bool(prot_data.get("hardware_verified", False))
         tpm_contra = bool(prot_data.get("tpm_contradiction", False))
         in_rec = bool(prot_data.get("in_recovery", False))
 
@@ -225,7 +227,9 @@ class AgentServiceProvider(QObject):
         verified = [
             {"tier": "Tầng 1: Cam Kết Băm SHA-512", "algorithm": "SHA-512 FIPS 180-4", "status": "VERIFIED" if hw_ver else "UNVERIFIED"},
             {"tier": "Tầng 2-4: Cây Phả Hệ Phần Cứng", "nodes": "Topology Root + Component Nodes", "status": "VERIFIED" if hw_ver else "UNVERIFIED"},
-            {"tier": "Tầng 5: Băm Xác Minh Trạng Thái", "commitment": data.get("verification_hash", "c8f39a02d41b...e92f"), "status": "VERIFIED" if hw_ver else "UNVERIFIED"},
+            # FIX F3: khong con hash mac dinh bi - khi agent khong cung cap
+            # verification_hash thi hien N/A thay vi bang chung gia.
+            {"tier": "Tầng 5: Băm Xác Minh Trạng Thái", "commitment": data.get("verification_hash") or "N/A (chưa có dữ liệu từ agent)", "status": "VERIFIED" if hw_ver else "UNVERIFIED"},
             {"tier": "TPM 2.0 NV Monotonic Counter", "counter_index": "0x01800001", "status": "PASS" if not tpm_contra else "CONTRADICTION_FAIL"},
         ]
         self.system_vm.update_hardware_data(observed_real, verified)
