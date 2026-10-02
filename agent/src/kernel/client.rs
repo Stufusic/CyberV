@@ -46,6 +46,9 @@ struct RawProtectedProcessRegistration {
     process_start_time: u64,
     registration_nonce: [u8; 64],
     driver_instance_id: u32,
+    // Phải bằng CYBERV_ABI_VERSION — driver từ chối đăng ký nếu lệch
+    // (anti ABI drift; đối xứng với `unsigned long long ClientAbiVersion` trong ioctl.h)
+    client_abi_version: u64,
 }
 
 #[repr(C, packed)]
@@ -112,6 +115,7 @@ impl WindowsKernelClient {
                     process_start_time: start_time,
                     registration_nonce: nonce,
                     driver_instance_id: 1,
+                    client_abi_version: super::protocol::CYBERV_ABI_VERSION as u64,
                 };
                 let mut bytes_returned: u32 = 0;
 
@@ -293,41 +297,18 @@ impl KernelProbeProvider for WindowsKernelClient {
 
                 CloseHandle(handle);
 
-                let header_size = std::mem::size_of::<u32>() * 2 + std::mem::size_of::<u64>();
-                if success == 0 || (bytes_returned as usize) < header_size {
+                if success == 0 {
                     return None;
                 }
 
-                let count = (raw_obs.device_count as usize).min(32);
-                let mut devices = Vec::with_capacity(count);
-                for i in 0..count {
-                    let dev = &raw_obs.devices[i];
-                    let sn_bytes = &dev.serial_number;
-                    let sn_len = sn_bytes.iter().position(|&b| b == 0).unwrap_or(sn_bytes.len());
-                    let sn_str = std::str::from_utf8(&sn_bytes[..sn_len])
-                        .ok()
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty());
-
-                    devices.push(KernelPciDevice {
-                        vendor_id: dev.vendor_id,
-                        device_id: dev.device_id,
-                        subsystem_vendor_id: dev.subsystem_vendor_id,
-                        subsystem_device_id: dev.subsystem_device_id,
-                        segment: dev.segment,
-                        bus: dev.bus,
-                        device: dev.device,
-                        function: dev.function,
-                        device_class: dev.device_class,
-                        serial_number: sn_str,
-                    });
-                }
-
-                Some(KernelObservationPayload::new(
-                    raw_obs.driver_version,
-                    devices,
-                    raw_obs.observed_at,
-                ))
+                // Parse qua pure function tren raw bytes (khong reinterpret struct)
+                // de co the kiem thu/fuzz ma khong can driver.
+                // (da nam trong unsafe block DeviceIoControl ben tren)
+                let raw_bytes = std::slice::from_raw_parts(
+                    &raw_obs as *const RawCybervKernelObservation as *const u8,
+                    std::mem::size_of::<RawCybervKernelObservation>(),
+                );
+                parse_kernel_observation_bytes(raw_bytes, bytes_returned as usize)
             }
         }
         #[cfg(not(windows))]
@@ -370,5 +351,217 @@ impl KernelProbeProvider for MockKernelClient {
         } else {
             None
         }
+    }
+}
+
+
+/// Kích thước header `CYBERV_KERNEL_OBSERVATION`: u32 driver_version + u32 device_count + u64 observed_at
+pub const KERNEL_OBSERVATION_HEADER_SIZE: usize = 16;
+/// Kích thước một entry `CYBERV_PCI_DEVICE` (packed): 14 byte header + 64 byte serial
+pub const KERNEL_PCI_DEVICE_SIZE: usize = 78;
+/// Số thiết bị tối đa mà ABI cho phép trong một frame
+pub const KERNEL_MAX_DEVICES: usize = 32;
+
+/// Pure parser cho payload trả về bởi IOCTL_CYBERV_GET_PCI_INFO.
+///
+/// Tách khỏi DeviceIoControl để kiểm thử/fuzz trực tiếp mà không cần driver.
+/// Fail-closed ở mọi điểm: frame ngắn, sai ABI version, device_count vượt giới
+/// hạn, hay bytes_returned không đủ chứa toàn bộ devices đều trả `None`
+/// (trước đây device_count bị clamp im lặng và partial frame vẫn được tin).
+pub fn parse_kernel_observation_bytes(
+    bytes: &[u8],
+    bytes_returned: usize,
+) -> Option<KernelObservationPayload> {
+    if bytes.len() < KERNEL_OBSERVATION_HEADER_SIZE
+        || bytes_returned < KERNEL_OBSERVATION_HEADER_SIZE
+    {
+        return None;
+    }
+
+    fn read_u16(b: &[u8], off: usize) -> u16 {
+        u16::from_le_bytes([b[off], b[off + 1]])
+    }
+    fn read_u32(b: &[u8], off: usize) -> u32 {
+        u32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]])
+    }
+    fn read_u64(b: &[u8], off: usize) -> u64 {
+        let mut arr = [0u8; 8];
+        arr.copy_from_slice(&b[off..off + 8]);
+        u64::from_le_bytes(arr)
+    }
+
+    // Anti ABI drift: driver phải cùng version ABI với client
+    let driver_version = read_u32(bytes, 0);
+    if driver_version != super::protocol::CYBERV_ABI_VERSION {
+        return None;
+    }
+
+    let device_count_raw = read_u32(bytes, 4) as usize;
+    if device_count_raw > KERNEL_MAX_DEVICES {
+        // Frame khai báo nhiều hơn giới hạn ABI -> dữ liệu hỏng/giả mạo
+        return None;
+    }
+    let observed_at = read_u64(bytes, 8);
+
+    // Không tin partial data: đủ byte cho TOÀN BỘ devices khai báo mới chấp nhận
+    let needed = KERNEL_OBSERVATION_HEADER_SIZE + device_count_raw * KERNEL_PCI_DEVICE_SIZE;
+    if bytes_returned < needed || bytes.len() < needed {
+        return None;
+    }
+
+    let mut devices = Vec::with_capacity(device_count_raw);
+    for i in 0..device_count_raw {
+        let base = KERNEL_OBSERVATION_HEADER_SIZE + i * KERNEL_PCI_DEVICE_SIZE;
+        let dev = &bytes[base..base + KERNEL_PCI_DEVICE_SIZE];
+
+        let sn_bytes = &dev[14..78];
+        let sn_len = sn_bytes.iter().position(|&b| b == 0).unwrap_or(sn_bytes.len());
+        let serial_number = std::str::from_utf8(&sn_bytes[..sn_len])
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        devices.push(KernelPciDevice {
+            vendor_id: read_u16(dev, 0),
+            device_id: read_u16(dev, 2),
+            subsystem_vendor_id: read_u16(dev, 4),
+            subsystem_device_id: read_u16(dev, 6),
+            segment: read_u16(dev, 8),
+            bus: dev[10],
+            device: dev[11],
+            function: dev[12],
+            device_class: dev[13],
+            serial_number,
+        });
+    }
+
+    Some(KernelObservationPayload::new(
+        driver_version,
+        devices,
+        observed_at,
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Dựng một frame observation hợp lệ theo ABI layout
+    fn build_frame(device_count: u32, serial: Option<&str>) -> Vec<u8> {
+        let mut frame = Vec::new();
+        frame.extend_from_slice(&super::super::protocol::CYBERV_ABI_VERSION.to_le_bytes());
+        frame.extend_from_slice(&device_count.to_le_bytes());
+        frame.extend_from_slice(&0x1122334455667788u64.to_le_bytes());
+        for i in 0..device_count as usize {
+            let mut dev = vec![0u8; KERNEL_PCI_DEVICE_SIZE];
+            dev[0..2].copy_from_slice(&0x8086u16.to_le_bytes());
+            dev[2..4].copy_from_slice(&(0x1000u16 + i as u16).to_le_bytes());
+            dev[13] = 0x01; // DeviceClass
+            if let Some(sn) = serial {
+                let bytes = sn.as_bytes();
+                let n = bytes.len().min(63);
+                dev[14..14 + n].copy_from_slice(&bytes[..n]);
+            }
+            frame.extend_from_slice(&dev);
+        }
+        frame
+    }
+
+    #[test]
+    fn parses_valid_frame() {
+        let frame = build_frame(2, Some("SN12345678"));
+        let payload = parse_kernel_observation_bytes(&frame, frame.len()).expect("valid frame");
+        assert_eq!(payload.devices.len(), 2);
+        assert_eq!(payload.devices[0].vendor_id, 0x8086);
+        assert_eq!(payload.devices[1].device_id, 0x1001);
+        assert_eq!(payload.devices[0].serial_number.as_deref(), Some("SN12345678"));
+    }
+
+    #[test]
+    fn rejects_wrong_abi_version() {
+        let mut frame = build_frame(1, None);
+        frame[0..4].copy_from_slice(&99u32.to_le_bytes());
+        assert!(parse_kernel_observation_bytes(&frame, frame.len()).is_none());
+    }
+
+    #[test]
+    fn rejects_oversized_device_count() {
+        let mut frame = build_frame(1, None);
+        frame[4..8].copy_from_slice(&33u32.to_le_bytes());
+        assert!(parse_kernel_observation_bytes(&frame, frame.len()).is_none());
+    }
+
+    #[test]
+    fn rejects_truncated_frames() {
+        let frame = build_frame(4, Some("SN"));
+        // Cắt giữa chừng: bytes_returned nhỏ hơn cần thiết cho 4 devices
+        assert!(parse_kernel_observation_bytes(&frame, 16 + 2 * KERNEL_PCI_DEVICE_SIZE).is_none());
+        // Buffer tồn tại nhưng bytes_returned chủ đủ header
+        assert!(parse_kernel_observation_bytes(&frame, 16).is_none());
+        // Buffer ngắn hơn header
+        assert!(parse_kernel_observation_bytes(&frame[..10], 10).is_none());
+        assert!(parse_kernel_observation_bytes(&[], 0).is_none());
+    }
+
+    #[test]
+    fn serial_parsing_handles_nul_utf8_and_empty() {
+        // Serial có NUL terminator + trailing junk
+        let mut frame = build_frame(1, Some("CLEAN_SN"));
+        let dev_off = KERNEL_OBSERVATION_HEADER_SIZE;
+        frame[dev_off + 14 + 8] = 0x00; // terminate sau 8 ký tự
+        frame[dev_off + 14 + 9] = 0xAB; // junk sau NUL
+        let payload = parse_kernel_observation_bytes(&frame, frame.len()).unwrap();
+        assert_eq!(payload.devices[0].serial_number.as_deref(), Some("CLEAN_SN"));
+
+        // Serial không phải UTF-8 -> None, không panic
+        let mut frame2 = build_frame(1, None);
+        frame2[dev_off + 14] = 0xFF;
+        frame2[dev_off + 15] = 0xFE;
+        let payload2 = parse_kernel_observation_bytes(&frame2, frame2.len()).unwrap();
+        assert!(payload2.devices[0].serial_number.is_none());
+
+        // Serial rỗng -> None
+        let frame3 = build_frame(1, None);
+        let payload3 = parse_kernel_observation_bytes(&frame3, frame3.len()).unwrap();
+        assert!(payload3.devices[0].serial_number.is_none());
+    }
+
+    /// Fuzz-style: dữ liệu ngẫu nhiên deterministic KHÔNG ĐƯỢC panic
+    /// (trước đây test tương đương là tautology `assert!(x.is_none() || x.is_some())`).
+    #[test]
+    fn fuzz_random_bytes_never_panic_and_never_accept_garbage() {
+        // xorshift64* deterministic
+        let mut state: u64 = 0x9E3779B97F4A7C15;
+        let mut next = move || {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            state.wrapping_mul(0x2545F4914F6CDD1D)
+        };
+
+        for _round in 0..2000 {
+            let len = (next() % 2600) as usize;
+            let mut bytes = vec![0u8; len];
+            for chunk in bytes.chunks_mut(8) {
+                let v = next().to_le_bytes();
+                chunk.copy_from_slice(&v[..chunk.len()]);
+            }
+            let bytes_returned = (next() % 2600) as usize;
+
+            let result = parse_kernel_observation_bytes(&bytes, bytes_returned);
+            if let Some(payload) = result {
+                // Nếu chấp nhận thì bắt buộc là frame hợp lệ:
+                // ABI khớp + devices trong giới hạn
+                assert!(payload.devices.len() <= KERNEL_MAX_DEVICES);
+            }
+        }
+    }
+
+    #[test]
+    fn parse_is_deterministic() {
+        let frame = build_frame(3, Some("DET"));
+        let a = parse_kernel_observation_bytes(&frame, frame.len()).unwrap();
+        let b = parse_kernel_observation_bytes(&frame, frame.len()).unwrap();
+        assert_eq!(a, b);
     }
 }

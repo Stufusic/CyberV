@@ -463,14 +463,35 @@ impl<T: DeviceTransport, C: HardwareCollector> AgentDaemon<T, C> {
                 consecutive_failures,
                 last_success_at,
             } => {
-                // Thử kết nối lại
+                // Thử kết nối lại. INV-001: chỉ được quay lại Active khi server
+                // XÁC THỰC THÀNH CÔNG — một phản hồi 200-OK với authenticated=false
+                // hoặc status lạ tuyệt đối không được tính là attestation thành công.
                 match self.attest_step().await {
-                    Ok(_) => {
+                    Ok(resp) if resp.authenticated && resp.status == "AUTHENTICATED" => {
                         self.state = AgentState::Active {
                             graph_version: self.current_graph_version,
                             state_hash: self.current_state_hash.clone().unwrap_or_default(),
                             last_attested_at: now_secs(),
                         };
+                        Ok(self.state.clone())
+                    }
+                    Ok(resp) => {
+                        // Server phản hồi hợp lệ nhưng từ chối xác thực: giữ nguyên
+                        // grace period (fail-closed), không bao giờ tự phục hồi trạng thái.
+                        let elapsed = now_secs().saturating_sub(last_success_at);
+                        if elapsed > self.config.max_offline_grace_secs {
+                            self.state = AgentState::SuspendedOrRejected {
+                                reason: format!(
+                                    "Offline grace period expired (server verdict: {})",
+                                    resp.status
+                                ),
+                            };
+                        } else {
+                            self.state = AgentState::OfflineGracePeriod {
+                                consecutive_failures: consecutive_failures.saturating_add(1),
+                                last_success_at,
+                            };
+                        }
                         Ok(self.state.clone())
                     }
                     Err(err) => {
@@ -481,7 +502,7 @@ impl<T: DeviceTransport, C: HardwareCollector> AgentDaemon<T, C> {
                             };
                         } else {
                             self.state = AgentState::OfflineGracePeriod {
-                                consecutive_failures: consecutive_failures + 1,
+                                consecutive_failures: consecutive_failures.saturating_add(1),
                                 last_success_at,
                             };
                         }

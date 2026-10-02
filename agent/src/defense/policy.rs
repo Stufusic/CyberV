@@ -255,7 +255,8 @@ impl SecurityPolicyEngine {
             ));
             PolicyDecision::Isolate {
                 reason: "Passive Defense Degraded Offline".to_string(),
-                severity: 10000 - composite,
+                // Clamp + saturating: composite tu serde/du lieu ngoai co the > 10000
+                severity: 10000u32.saturating_sub(composite.min(10000)),
             }
         } else if composite < config.allow_threshold {
             rationales.push(format!(

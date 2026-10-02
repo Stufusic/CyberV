@@ -120,10 +120,10 @@ fn test_mutant_01_shield_inactive_forces_isolate() {
 fn test_mutant_09_ioctl_abi_contract() {
     // Windows CTL_CODE macro: (DeviceType << 16) | (Access << 14) | (Function << 2) | Method
     // FILE_DEVICE_CYBERV = 0x8000, METHOD_BUFFERED = 0, FILE_READ_DATA = 1, FILE_WRITE_DATA = 2
-    let expected_pci_info = (0x8000 << 16) | (1 << 14) | (0x800 << 2) | 0;
-    let expected_topology = (0x8000 << 16) | (1 << 14) | (0x801 << 2) | 0;
-    let expected_reg_pid = (0x8000 << 16) | ((1 | 2) << 14) | (0x802 << 2) | 0;
-    let expected_telemetry = (0x8000 << 16) | (1 << 14) | (0x803 << 2) | 0;
+    let expected_pci_info = (0x8000 << 16) | (1 << 14) | (0x800 << 2);
+    let expected_topology = (0x8000 << 16) | (1 << 14) | (0x801 << 2);
+    let expected_reg_pid = (0x8000 << 16) | ((1 | 2) << 14) | (0x802 << 2);
+    let expected_telemetry = (0x8000 << 16) | (1 << 14) | (0x803 << 2);
 
     assert_eq!(
         IOCTL_CYBERV_GET_PCI_INFO, expected_pci_info,
@@ -194,7 +194,7 @@ fn test_mutant_13_driver_unload_cleanup_omission() {
         protected_pid: 1234,
     };
     assert_eq!(state.unload(), Ok(()));
-    assert_eq!(state.callbacks_registered, false);
+    assert!(!state.callbacks_registered);
     assert_eq!(state.protected_pid, 0);
 }
 
@@ -210,8 +210,8 @@ fn test_mutant_14_driver_unreachable_must_degrade_score() {
         report.defense_score, 3000,
         "MUT-14 Oracle: Unreachable driver MUST degrade defense_score to 3000"
     );
-    assert_eq!(
-        report.is_tampering_detected, true,
+    assert!(
+        report.is_tampering_detected,
         "MUT-14 Oracle: Unreachable driver MUST set is_tampering_detected = true"
     );
 }
@@ -266,11 +266,11 @@ fn test_mutant_16_target_process_check_bypass() {
     }
 
     let target_agent = pre_operation_filter(1234, 1234, 0x1F0FFF);
-    assert_eq!(target_agent.1, true);
+    assert!(target_agent.1);
     assert_eq!(target_agent.0 & 0x0001, 0, "PROCESS_TERMINATE must be stripped");
 
     let foreign_process = pre_operation_filter(9999, 1234, 0x1F0FFF);
-    assert_eq!(foreign_process.1, false);
+    assert!(!foreign_process.1);
     assert_eq!(foreign_process.0, 0x1F0FFF, "Other processes unaffected");
 }
 
@@ -344,8 +344,8 @@ fn test_mutant_03_missing_driver_never_verified() {
         report.status,
         cyberv_agent::kernel::cross_validator::ValidationStatus::Unknown
     );
-    assert_eq!(
-        report.is_hardware_verified, false,
+    assert!(
+        !report.is_hardware_verified,
         "MUT-03 Oracle: Missing driver MUST set is_hardware_verified = false"
     );
 }
@@ -393,6 +393,7 @@ fn test_mutant_05_replayed_challenge_must_be_rejected() {
         &proof_b,
         &admin_pubkey,
         expected_cert_hash,
+        1000,
     );
 
     assert_eq!(
@@ -477,6 +478,7 @@ fn test_mutant_04_forged_ed25519_signature_rejected() {
         &forged_proof,
         &admin_pubkey,
         expected_cert_hash,
+        1000,
     );
 
     assert!(

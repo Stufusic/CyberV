@@ -170,7 +170,8 @@ impl PassiveDefenseCoordinator {
             + (update.update_score as u64 * 500)
             + (platform.platform_score as u64 * 1000);
 
-        let composite_passive_score = (weighted / 10000) as u32;
+        // Clamp: du lieu con diem ngoai (serde) khong duoc cho composite vuot 10000
+        let composite_passive_score = ((weighted / 10000) as u32).min(10000);
 
         let assurance = if composite_passive_score >= 8000
             && platform.is_measured_boot_active

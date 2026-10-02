@@ -64,11 +64,17 @@ impl TpmProvider for MockTpmProvider {
         }
 
         let signing_key = SigningKey::generate(&mut OsRng);
-        self.keys.insert(key_id.to_string(), signing_key.clone());
-
         let mfg = self.capabilities.manufacturer.clone().unwrap_or_default();
         let key_ref = format!("tpm://mock-pcp/{}", key_id);
-        Ok(TpmIdentityKey::new_hardware_backed(
+
+        // Lưu theo key_reference — cùng khóa mà generate_quote dùng để tra cứu.
+        // Trước đây map lưu theo key_id nhưng tra cứu theo key_reference:
+        // bug lệch khóa bị "fallback ký bằng khóa bất kỳ" che mất.
+        self.keys
+            .insert(key_ref.clone(), signing_key.clone());
+
+        // Mock provider: khóa là phần mềm trong RAM — phải báo trung thực
+        Ok(TpmIdentityKey::new_simulated_software(
             key_ref,
             mfg,
             signing_key,
@@ -87,16 +93,17 @@ impl TpmProvider for MockTpmProvider {
         timestamp: u64,
         key: &TpmIdentityKey,
     ) -> Result<TpmQuote, TpmError> {
+        // CHỈ ký bằng đúng khóa được yêu cầu — fallback "ký bằng khóa bất kỳ
+        // trong map" cho phép sinh quote bằng khóa lạ (wrong-key quote).
         let signing_key = self
             .keys
             .get(&key.key_reference)
             .cloned()
-            .or_else(|| {
-                // Cho phép tìm theo reference hoặc tạo lại từ handle
-                self.keys.values().next().cloned()
-            })
             .ok_or_else(|| {
-                TpmError::KeyError("Signing key not found in TPM provider".to_string())
+                TpmError::KeyError(format!(
+                    "Signing key not found in TPM provider: {}",
+                    key.key_reference
+                ))
             })?;
 
         TpmQuote::generate(

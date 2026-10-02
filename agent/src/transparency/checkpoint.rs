@@ -81,7 +81,11 @@ impl SignedCheckpoint {
         }
     }
 
-    /// Xác minh tính hợp lệ của chữ ký thẩm quyền trên Checkpoint
+    /// Xác minh tính TỰ-NHẤT QUÁN của chữ ký trên Checkpoint (khóa nhúng trong
+    /// checkpoint tự xác minh chính nó). CHỈ dùng cho kiểm tra cấu trúc/số học —
+    /// TUYỆT ĐỐI không dùng làm quyết định an ninh: bất kỳ ai cũng tự sinh keypair
+    /// rồi tự ký checkpoint hợp lệ (rogue-key bypass). Quyết định tin cậy phải
+    /// qua `verify_with_pinned_authority`.
     pub fn verify(&self) -> bool {
         let pub_key_bytes = match hex_to_bytes32(&self.authority_public_key_hex) {
             Some(b) => b,
@@ -100,6 +104,21 @@ impl SignedCheckpoint {
 
         let digest = self.to_canonical_bytes();
         verifying_key.verify(&digest, &signature).is_ok()
+    }
+
+    /// Xác minh Checkpoint bằng KHÓA THẨM QUYỀN ĐƯỢC PIN CỐ ĐỊNH (HCE-8).
+    /// Khóa công khai nhúng trong checkpoint buộc phải trùng khớp khóa thẩm quyền
+    /// đã pin — chặn triệt để rogue-key: attacker tự sinh keypair và tự ký
+    /// checkpoint sẽ bị từ chối tại bước so khớp khóa trước cả khi verify chữ ký.
+    pub fn verify_with_pinned_authority(&self, pinned_authority_key: &VerifyingKey) -> bool {
+        let embedded = match hex_to_bytes32(&self.authority_public_key_hex) {
+            Some(b) => b,
+            None => return false,
+        };
+        if embedded != *pinned_authority_key.as_bytes() {
+            return false;
+        }
+        self.verify()
     }
 }
 

@@ -86,9 +86,12 @@ impl UpdateStagingManager {
             Some(m) => match m.stage {
                 // Trường hợp 1: Đã tăng TPM counter nhưng tiến trình crash trước khi ghi commit hoàn tất
                 CommitStage::TpmIncremented => {
+                    // Hoàn tất commit CHỈ khi cả hai điều kiện cùng thỏa:
+                    // counter TPM khớp target VÀ binary đang active đúng là gói đã cam kết.
+                    // Điều kiện "hash || version" cũ cho phép một binary chỉ cần
+                    // tự khai đúng version là được hoàn tất dù băm lệch — đã loại bỏ.
                     if (m.target_version as u64) == tpm_counter
-                        && (active_binary_hash == m.package_hash
-                            || active_version == m.target_version)
+                        && active_binary_hash == m.package_hash
                     {
                         StartupRecoveryAction::CompleteCommit {
                             target_version: m.target_version,
@@ -99,7 +102,10 @@ impl UpdateStagingManager {
                             tpm_counter,
                         }
                     } else {
-                        StartupRecoveryAction::CompleteCommit {
+                        // Trạng thái bất nhất (counter/target/hash không khớp nhau):
+                        // fail-closed — hoàn tất commit trên trạng thái này là rollback
+                        // ngầm, chuyển sang rollback sạch thay vì "CompleteCommit".
+                        StartupRecoveryAction::RollbackCleanly {
                             target_version: m.target_version,
                         }
                     }
@@ -126,5 +132,125 @@ impl UpdateStagingManager {
                 }
             }
         }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TARGET: u32 = 5;
+    const PKG_HASH: &str = "pkg_hash_abc";
+
+    fn marker(stage: CommitStage) -> PendingCommitMarker {
+        PendingCommitMarker {
+            marker_id: "m1".to_string(),
+            target_version: TARGET,
+            package_hash: PKG_HASH.to_string(),
+            stage,
+            timestamp: 1000,
+        }
+    }
+
+    #[test]
+    fn tpm_incremented_with_matching_hash_and_counter_completes() {
+        let action = UpdateStagingManager::evaluate_startup_recovery(
+            Some(&marker(CommitStage::TpmIncremented)),
+            PKG_HASH,
+            TARGET,
+            TARGET as u64,
+        );
+        assert_eq!(
+            action,
+            StartupRecoveryAction::CompleteCommit { target_version: TARGET }
+        );
+    }
+
+    /// REGRESSION M1: điều kiện "hash || version" cũ cho phép binary chỉ cần
+    /// tự khai đúng version là hoàn tất commit dù băm lệch — phải bị chặn.
+    #[test]
+    fn tpm_incremented_with_mismatched_hash_never_completes() {
+        // Version khớp nhưng hash KHÔNG khớp -> không được CompleteCommit
+        let action = UpdateStagingManager::evaluate_startup_recovery(
+            Some(&marker(CommitStage::TpmIncremented)),
+            "different_binary_hash",
+            TARGET,
+            TARGET as u64,
+        );
+        assert_ne!(action, StartupRecoveryAction::CompleteCommit { target_version: TARGET });
+
+        // Hash khớp nhưng counter/target lệch -> cũng không được CompleteCommit
+        let action2 = UpdateStagingManager::evaluate_startup_recovery(
+            Some(&marker(CommitStage::TpmIncremented)),
+            PKG_HASH,
+            TARGET,
+            (TARGET + 1) as u64,
+        );
+        assert_ne!(action2, StartupRecoveryAction::CompleteCommit { target_version: TARGET });
+    }
+
+    /// REGRESSION M1: nhánh else cũ trả CompleteCommit trên trạng thái bất nhất
+    /// (active_version > tpm_counter) — giờ phải RollbackCleanly/Contradiction.
+    #[test]
+    fn inconsistent_state_rolls_back_instead_of_completing() {
+        let action = UpdateStagingManager::evaluate_startup_recovery(
+            Some(&marker(CommitStage::TpmIncremented)),
+            "different_binary_hash",
+            TARGET + 2, // active TRƯỚC counter -> trạng thái bất nhất
+            TARGET as u64,
+        );
+        assert!(matches!(
+            action,
+            StartupRecoveryAction::RollbackCleanly { .. }
+                | StartupRecoveryAction::ContradictionDetected { .. }
+        ));
+    }
+
+    #[test]
+    fn software_rollback_detected_without_marker() {
+        let action = UpdateStagingManager::evaluate_startup_recovery(None, "hash", 3, 7);
+        assert_eq!(
+            action,
+            StartupRecoveryAction::ContradictionDetected {
+                software_version: 3,
+                tpm_counter: 7,
+            }
+        );
+    }
+
+    #[test]
+    fn staged_stage_rolls_back_and_committed_stage_noops() {
+        assert_eq!(
+            UpdateStagingManager::evaluate_startup_recovery(
+                Some(&marker(CommitStage::Staged)),
+                PKG_HASH,
+                TARGET - 1,
+                TARGET as u64
+            ),
+            StartupRecoveryAction::RollbackCleanly { target_version: TARGET }
+        );
+        assert_eq!(
+            UpdateStagingManager::evaluate_startup_recovery(
+                Some(&marker(CommitStage::SoftwareCommitted)),
+                PKG_HASH,
+                TARGET,
+                TARGET as u64
+            ),
+            StartupRecoveryAction::NoActionRequired
+        );
+    }
+
+    #[test]
+    fn advance_state_gate_is_fail_closed() {
+        // Chưa verify -> không được stage
+        assert!(UpdateStagingManager::advance_state(UpdateStagingState::Current, false).is_err());
+        // Staged -> verify fail -> RolledBack
+        assert_eq!(
+            UpdateStagingManager::advance_state(UpdateStagingState::Staged, false).unwrap(),
+            UpdateStagingState::RolledBack
+        );
+        // Active không advance được nữa
+        assert!(UpdateStagingManager::advance_state(UpdateStagingState::Active, true).is_err());
     }
 }

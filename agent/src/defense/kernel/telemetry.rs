@@ -51,7 +51,11 @@ impl ShieldTelemetry {
     }
 
     pub fn total_blocked(&self) -> u32 {
-        self.blocked_terminations + self.blocked_vm_reads + self.blocked_vm_writes
+        // Counters den tu kernel co the rat lon khi bi spam open-process;
+        // cong sat thay vi cong thuan de tranh overflow (panic debug / wrap release).
+        self.blocked_terminations
+            .saturating_add(self.blocked_vm_reads)
+            .saturating_add(self.blocked_vm_writes)
     }
 
     pub fn has_tampering_attempts(&self) -> bool {

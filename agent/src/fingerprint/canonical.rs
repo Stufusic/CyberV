@@ -36,16 +36,34 @@ impl CanonicalEncoder {
     /// Xuất ra chuỗi byte chính tắc (Canonical Byte Stream)
     ///
     /// Định dạng: mỗi dòng gồm `key=value\n`. Các key luôn được sắp xếp thứ tự từ điển tăng dần.
+    /// Key và value được ESCAPE (`\\`, `=`, `\n`, `\r`) để encoding là INJECTIVE:
+    /// hai tập trường khác nhau không thể tạo cùng byte stream
+    /// (M1: `("a","b\nc=1")` cũ từng trùng với `("a","b")+("c","1")`).
     pub fn to_canonical_bytes(&self) -> Vec<u8> {
         let mut buffer = Vec::new();
         for (key, value) in &self.fields {
-            buffer.extend_from_slice(key.as_bytes());
+            buffer.extend_from_slice(escape_canonical_field(key).as_bytes());
             buffer.push(b'=');
-            buffer.extend_from_slice(value.as_bytes());
+            buffer.extend_from_slice(escape_canonical_field(value).as_bytes());
             buffer.push(b'\n');
         }
         buffer
     }
+}
+
+/// Escape một trường cho canonical `k=v\n` encoding (backslash-first).
+pub fn escape_canonical_field(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '=' => out.push_str("\\="),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// Cấu trúc đại diện cho một Node trong Hardware Graph
@@ -85,12 +103,17 @@ pub fn encode_canonical_graph(
             .then_with(|| a.target.cmp(&b.target))
     });
 
+    // M1: escape mọi trường cho encoding injective — giá trị chứa `|`, `=`
+    // hay `\n` không thể giả làm ranh giới trường/dòng.
     let mut buffer = Vec::new();
     buffer.extend_from_slice(b"NODES:\n");
     for node in nodes {
         let line = format!(
             "type={}|id={}|hash={}|v={}\n",
-            node.component_type, node.stable_id, node.component_hash, node.schema_version
+            escape_graph_field(&node.component_type),
+            escape_graph_field(&node.stable_id),
+            escape_graph_field(&node.component_hash),
+            node.schema_version
         );
         buffer.extend_from_slice(line.as_bytes());
     }
@@ -99,12 +122,30 @@ pub fn encode_canonical_graph(
     for edge in edges {
         let line = format!(
             "src={}|rel={}|dst={}\n",
-            edge.source, edge.relation, edge.target
+            escape_graph_field(&edge.source),
+            escape_graph_field(&edge.relation),
+            escape_graph_field(&edge.target)
         );
         buffer.extend_from_slice(line.as_bytes());
     }
 
     buffer
+}
+
+/// Escape một trường cho graph line encoding `k=v|...\n`.
+pub fn escape_graph_field(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '|' => out.push_str("\\|"),
+            '=' => out.push_str("\\="),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -167,5 +208,44 @@ mod tests {
 
         // Cả 2 phải cho ra cùng 1 chuỗi byte chính xác
         assert_eq!(bytes1, bytes2);
+    }
+
+    /// M1 REGRESSION: encoding phải injective — giá trị chứa ký tự ranh giới
+    /// không được tạo byte stream trùng với một tập trường khác.
+    #[test]
+    fn test_canonical_encoder_injective_over_separator_chars() {
+        // ("a","b\nc=1") phải khác ("a","b") + ("c","1")
+        let mut enc1 = CanonicalEncoder::new();
+        enc1.add_field("a", "b\nc=1");
+
+        let mut enc2 = CanonicalEncoder::new();
+        enc2.add_field("a", "b").add_field("c", "1");
+
+        assert_ne!(enc1.to_canonical_bytes(), enc2.to_canonical_bytes());
+
+        // Graph encoding: giá trị chứa `|` không giả được ranh giới trường
+        let g1 = encode_canonical_graph(
+            vec![CanonicalGraphNode {
+                component_type: "cpu|x=1".to_string(),
+                stable_id: "s".to_string(),
+                component_hash: "h".to_string(),
+                schema_version: 1,
+            }],
+            vec![],
+        );
+        let g2 = encode_canonical_graph(
+            vec![CanonicalGraphNode {
+                component_type: "cpu".to_string(),
+                stable_id: "s".to_string(),
+                component_hash: "h".to_string(),
+                schema_version: 1,
+            }],
+            vec![CanonicalGraphEdge {
+                source: "x=1".to_string(),
+                relation: "r".to_string(),
+                target: "t".to_string(),
+            }],
+        );
+        assert_ne!(g1, g2);
     }
 }

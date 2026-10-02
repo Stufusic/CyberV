@@ -110,12 +110,32 @@ impl RecoveryManager {
     }
 
     /// Xác minh bằng chứng phục hồi (Recovery Proof)
+    ///
+    /// INV-003: bắt buộc chữ ký Ed25519 bất đối xứng từ Admin Authority.
+    /// Đường "legacy fallback" cũ đã bị XÓA: "chữ ký" SHA-512 trên toàn bộ input
+    /// công khai (challenge_id || new_pcr || pubkey) không chứa bất kỳ bí mật nào
+    /// nên bất kỳ caller nào cũng tự tính được — đó là bypass xác thực, không phải
+    /// cơ chế tương thích. Khóa admin sai độ dài giờ là lỗi cứng.
+    ///
+    /// `now` được inject để kiểm tra hạn challenge (fail-closed) mà vẫn kiểm thử
+    /// deterministic được; caller truyền thời gian thực hiện tại.
     pub fn verify_and_re_attest(
         challenge: &RecoveryChallenge,
         proof: &RecoveryProof,
         admin_pubkey: &[u8],
         expected_oem_cert_hash: &str,
+        now: u64,
     ) -> Result<DeviceLifecycleState, &'static str> {
+        // 1. Challenge phải còn hạn: chặn replay challenge cũ đã bị lộ
+        //    (chống snapshot rollback: kẻ tấn công khôi phục trạng thái cũ
+        //    không được tái sử dụng challenge tạo trước thời điểm rollback).
+        if now < challenge.created_at {
+            return Err("Recovery challenge timestamp is in the future");
+        }
+        if now.saturating_sub(challenge.created_at) > MAX_RECOVERY_CHALLENGE_AGE_SECS {
+            return Err("Recovery challenge expired");
+        }
+
         if challenge.challenge_id != proof.challenge_id {
             return Err("Challenge ID mismatch");
         }
@@ -124,71 +144,73 @@ impl RecoveryManager {
             return Err("OEM update certificate hash mismatch");
         }
 
-        // Bất biến INV-003: Nếu admin_pubkey là khóa Ed25519 32-byte, thực thi kiểm tra chữ ký số bất đối xứng nghiêm ngặt
-        if admin_pubkey.len() == 32 {
-            let pubkey_bytes: [u8; 32] = admin_pubkey
-                .try_into()
-                .map_err(|_| "Invalid admin public key length")?;
-            let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&pubkey_bytes)
-                .map_err(|_| "Invalid Ed25519 public key")?;
-
-            let sig_bytes = hex_decode_64(&proof.admin_signature_sha512)
-                .ok_or("Invalid signature format (expected 64 bytes hex)")?;
-            let signature = ed25519_dalek::Signature::from_bytes(&sig_bytes);
-
-            let canonical_msg = compute_canonical_recovery_message(challenge);
-            verifying_key
-                .verify_strict(&canonical_msg, &signature)
-                .map_err(|_| "Invalid admin authorization signature (Ed25519 verification failed)")?;
-
-            return Ok(DeviceLifecycleState::ActiveAttested);
+        // 2. INV-003: khóa admin phải là Ed25519 32-byte — không có ngoại lệ
+        if admin_pubkey.len() != 32 {
+            return Err("Admin public key must be a 32-byte Ed25519 key");
         }
+        let pubkey_bytes: [u8; 32] = admin_pubkey
+            .try_into()
+            .map_err(|_| "Admin public key must be a 32-byte Ed25519 key")?;
+        let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&pubkey_bytes)
+            .map_err(|_| "Invalid Ed25519 public key")?;
 
-        // Fallback tương thích ngược với legacy mock key (< 32 bytes)
-        let mut expected_admin_hasher = Sha512::new();
-        expected_admin_hasher.update(challenge.challenge_id.as_bytes());
-        expected_admin_hasher.update(challenge.new_pcr_sha512.as_bytes());
-        expected_admin_hasher.update(admin_pubkey);
-        let expected_admin_sig = {
-            let out = expected_admin_hasher.finalize();
-            let mut s = String::with_capacity(out.len() * 2);
-            for b in out {
-                let _ = write!(s, "{:02x}", b);
-            }
-            s
-        };
+        let sig_bytes = hex_decode_64(&proof.admin_signature_sha512)
+            .ok_or("Invalid admin authorization signature")?;
+        let signature = ed25519_dalek::Signature::from_bytes(&sig_bytes);
 
-        if proof.admin_signature_sha512 != expected_admin_sig {
-            return Err("Invalid admin authorization signature");
-        }
+        let canonical_msg = compute_canonical_recovery_message(challenge);
+        verifying_key
+            .verify_strict(&canonical_msg, &signature)
+            .map_err(|_| "Invalid admin authorization signature")?;
 
         // Tái xác thực thành công -> phục hồi trạng thái ActiveAttested
         Ok(DeviceLifecycleState::ActiveAttested)
     }
 }
 
+/// Hạn tối đa của một Recovery Challenge: 15 phút.
+pub const MAX_RECOVERY_CHALLENGE_AGE_SECS: u64 = 900;
+
 pub const DOMAIN_RECOVERY: &[u8] = b"CYBERV/RECOVERY/v1\0";
 
+/// Thông điệp ký canonical của challenge phục hồi: mọi trường độ dài thay đổi
+/// đều prefix độ dài (u32 BE), kèm previous_pcr, nonce và created_at để chữ ký
+/// bó chặt vào toàn bộ ngữ cảnh chuyển đổi PCR — không thể chuyển chữ ký giữa
+/// hai challenge hay hai lần chuyển trạng thái khác nhau.
 pub fn compute_canonical_recovery_message(challenge: &RecoveryChallenge) -> Vec<u8> {
+    fn push_field(msg: &mut Vec<u8>, field: &[u8]) {
+        msg.extend_from_slice(&(field.len() as u32).to_be_bytes());
+        msg.extend_from_slice(field);
+    }
+
     let mut msg = Vec::new();
     msg.extend_from_slice(DOMAIN_RECOVERY);
-    msg.extend_from_slice(challenge.challenge_id.as_bytes());
-    msg.push(0);
-    msg.extend_from_slice(challenge.new_pcr_sha512.as_bytes());
-    msg.push(0);
-    msg.extend_from_slice(challenge.device_id.as_bytes());
-    msg.push(0);
+    push_field(&mut msg, challenge.challenge_id.as_bytes());
+    push_field(&mut msg, challenge.device_id.as_bytes());
+    push_field(&mut msg, challenge.previous_pcr_sha512.as_bytes());
+    push_field(&mut msg, challenge.new_pcr_sha512.as_bytes());
+    msg.extend_from_slice(&challenge.nonce);
     msg.extend_from_slice(&challenge.created_at.to_le_bytes());
     msg
 }
 
-fn hex_decode_64(hex_str: &str) -> Option<[u8; 64]> {
-    if hex_str.len() != 128 {
+fn hex_decode_64(s: &str) -> Option<[u8; 64]> {
+    let bytes = s.as_bytes();
+    if bytes.len() != 128 {
         return None;
     }
-    let mut bytes = [0u8; 64];
-    for i in 0..64 {
-        bytes[i] = u8::from_str_radix(&hex_str[i * 2..i * 2 + 2], 16).ok()?;
+    fn hex_val(b: u8) -> Option<u8> {
+        match b {
+            b'0'..=b'9' => Some(b - b'0'),
+            b'a'..=b'f' => Some(b - b'a' + 10),
+            b'A'..=b'F' => Some(b - b'A' + 10),
+            _ => None,
+        }
     }
-    Some(bytes)
+    let mut out = [0u8; 64];
+    for (i, chunk) in bytes.as_chunks::<2>().0.iter().enumerate() {
+        out[i] = (hex_val(chunk[0])? << 4) | hex_val(chunk[1])?;
+    }
+    Some(out)
 }
+

@@ -250,6 +250,12 @@ impl TpmNvCounter for MockTpmNvCounter {
 }
 
 /// Triển khai kết nối TPM Base Services (TBS) của Windows
+///
+/// TRẠNG THÁI HIỆN TẠI (trung thực): lớp này CHƯA gửi lệnh TPM2 nào qua TBS —
+/// mọi thao tác đang chạy trên bộ đếm phần mềm in-process (mất khi reboot).
+/// Do đó `get_assurance_type()` trả `SoftwareFallback` thay vì `HardwareBacked`.
+/// Phase 2 sẽ thay `fallback` bằng `Tbsip_Submit_Command` thực sự
+/// (TPM2_NV_ReadPublic / DefineSpace / Increment) rồi khi đó mới nâng assurance.
 #[derive(Debug, Clone)]
 pub struct WindowsTbsNvCounter {
     assurance: TpmAssuranceType,
@@ -265,8 +271,10 @@ impl Default for WindowsTbsNvCounter {
 impl WindowsTbsNvCounter {
     pub fn new() -> Self {
         Self {
-            assurance: TpmAssuranceType::HardwareBacked,
-            fallback: MockTpmNvCounter::new(TpmAssuranceType::HardwareBacked),
+            // INV-trung thực: bộ đếm hiện chạy trên RAM, không phải TPM NV —
+            // báo HardwareBacked ở đây là xác nhận giả về nền tảng chống rollback.
+            assurance: TpmAssuranceType::SoftwareFallback,
+            fallback: MockTpmNvCounter::new(TpmAssuranceType::SoftwareFallback),
         }
     }
 }

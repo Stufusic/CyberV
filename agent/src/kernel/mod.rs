@@ -7,7 +7,10 @@ pub mod client;
 pub mod cross_validator;
 pub mod protocol;
 
-pub use client::{KernelProbeProvider, MockKernelClient, WindowsKernelClient};
+pub use client::{
+    parse_kernel_observation_bytes, KernelProbeProvider, MockKernelClient, WindowsKernelClient,
+    KERNEL_MAX_DEVICES, KERNEL_OBSERVATION_HEADER_SIZE, KERNEL_PCI_DEVICE_SIZE,
+};
 pub use cross_validator::{
     CrossLayerValidationReport, CrossLayerValidator, ValidationStatus, KERNEL_DERIVATION_VERSION,
 };

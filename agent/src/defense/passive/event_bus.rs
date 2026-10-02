@@ -239,9 +239,22 @@ impl SecurityEventBus {
             Ok(mut lock) => lock.push(event),
             Err(poisoned) => {
                 let mut lock = poisoned.into_inner();
-                lock.push(event);
+                Self::push_bounded(&mut lock, event);
             }
         }
+    }
+
+
+    /// Giới hạn hàng đợi sự kiện: nếu drain_events bị chặn (fusion loop treo),
+    /// publish không được phép phình bộ nhớ vô hạn. Vượt ngưỡng -> bỏ sự kiện
+    /// cũ nhất (giữ bằng chứng mới nhất, mỗi sự kiện vẫn có timestamp riêng).
+    pub const MAX_EVENT_QUEUE: usize = 10000;
+
+    fn push_bounded(queue: &mut Vec<SecurityEvent>, event: SecurityEvent) {
+        if queue.len() >= Self::MAX_EVENT_QUEUE {
+            queue.remove(0);
+        }
+        queue.push(event);
     }
 
     /// Lấy toàn bộ sự kiện hiện có và xóa hàng đợi (phục hồi an toàn nếu bị poison)

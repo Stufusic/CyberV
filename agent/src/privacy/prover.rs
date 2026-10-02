@@ -7,11 +7,15 @@
 use super::circuit::{CircuitError, HardwareCircuit};
 use super::statement::DevicePolicy;
 use super::witness::HardwareWitness;
+use ed25519_dalek::{Signer, SigningKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha512};
+use std::fmt::Write as _;
 use thiserror::Error;
 
 pub const DOMAIN_ZK_PROOF: &[u8] = b"CYBERV_ZK_DEVICE_PROOF_v1";
+
+pub const DOMAIN_ZK_DEVICE_SIGNATURE: &[u8] = b"CYBERV_ZK_DEVICE_SIGNATURE_v1\0";
 
 #[derive(Debug, Error)]
 pub enum ProverError {
@@ -33,21 +37,50 @@ pub struct ZkProof {
     pub nonce: String,
     /// Cam kết mật mã chứng minh (Proof Commitment - SHA-512)
     pub proof_commitment: String,
+    /// Chữ ký Ed25519 của DEVICE IDENTITY KEY trên toàn bộ ngữ cảnh proof.
+    /// H7 fix: "circuit" chỉ chạy trên máy prover nên commitment tự nó không có
+    /// soundness (ai cũng tự tính được). Ký bằng khóa định danh thiết bị biến
+    /// proof thành SIGNED ATTESTED CLAIM: chỉ thiết bị giữ khóa private mới
+    /// sinh được proof hợp lệ cho commitment/nonce/root này.
+    #[serde(default)]
+    pub device_signature_hex: String,
     /// Bằng chứng nén nhị phân
     pub proof_bytes: Vec<u8>,
     pub issued_at: u64,
 }
 
+impl ZkProof {
+    /// Byte payload mà device identity key ký — length-prefixed toàn bộ.
+    pub fn canonical_device_signature_bytes(&self) -> Vec<u8> {
+        fn push_field(buf: &mut Vec<u8>, field: &[u8]) {
+            buf.extend_from_slice(&(field.len() as u32).to_be_bytes());
+            buf.extend_from_slice(field);
+        }
+
+        let mut msg = Vec::new();
+        msg.extend_from_slice(DOMAIN_ZK_DEVICE_SIGNATURE);
+        msg.extend_from_slice(&self.circuit_version.to_be_bytes());
+        push_field(&mut msg, self.public_root.as_bytes());
+        push_field(&mut msg, self.policy_id.as_bytes());
+        msg.extend_from_slice(&self.policy_version.to_be_bytes());
+        push_field(&mut msg, self.nonce.as_bytes());
+        push_field(&mut msg, self.proof_commitment.as_bytes());
+        msg
+    }
+}
+
 pub struct ZkProver;
 
 impl ZkProver {
-    /// Sinh bằng chứng Zero-Knowledge từ nhân chứng phần cứng bí mật
+    /// Sinh bằng chứng từ nhân chứng phần cứng bí mật, ký bằng khóa định danh
+    /// thiết bị (signed attested claim — xem `device_signature_hex`).
     pub fn prove(
         witness: &HardwareWitness,
         policy: &DevicePolicy,
         public_root: &str,
         nonce: &str,
         circuit_version: u32,
+        device_identity_key: &SigningKey,
     ) -> Result<ZkProof, ProverError> {
         // 1. Đánh giá toàn bộ các ràng buộc trong mạch
         let eval_result =
@@ -76,13 +109,7 @@ impl ZkProver {
 
         let proof_id = format!("zkproof:{}:{:x}", &proof_commitment[..16], now);
 
-        // Đóng gói proof_bytes chứa commitment và metadata
-        let proof_payload = format!(
-            "v={}&cr={}&pi={}&pv={}&n={}&c={}",
-            circuit_version, public_root, policy.policy_id, policy.version, nonce, proof_commitment
-        );
-
-        Ok(ZkProof {
+        let proof = ZkProof {
             proof_id,
             circuit_version,
             public_root: public_root.to_string(),
@@ -90,8 +117,28 @@ impl ZkProver {
             policy_version: policy.version,
             nonce: nonce.to_string(),
             proof_commitment,
-            proof_bytes: proof_payload.into_bytes(),
+            device_signature_hex: String::new(),
+            proof_bytes: Vec::new(),
             issued_at: now,
+        };
+
+        // Ký ngữ cảnh proof bằng khóa định danh thiết bị
+        let signature = device_identity_key.sign(&proof.canonical_device_signature_bytes());
+        let mut sig_hex = String::with_capacity(128);
+        for b in signature.to_bytes() {
+            let _ = write!(sig_hex, "{:02x}", b);
+        }
+
+        // Đóng gói proof_bytes chứa commitment và metadata
+        let proof_payload = format!(
+            "v={}&cr={}&pi={}&pv={}&n={}&c={}",
+            circuit_version, public_root, policy.policy_id, policy.version, nonce, proof.proof_commitment
+        );
+
+        Ok(ZkProof {
+            device_signature_hex: sig_hex,
+            proof_bytes: proof_payload.into_bytes(),
+            ..proof
         })
     }
 }

@@ -6,6 +6,7 @@
 
 use super::protocol::{IpcCommand, IpcProtocolValidator, MAX_IPC_MESSAGE_SIZE};
 use serde::{Deserialize, Serialize};
+use tracing::{error, info, warn};
 
 pub const DEFAULT_PIPE_NAME: &str = r"\\.\pipe\CyberVIPC";
 pub const EXPECTED_CLIENT_VERSION: &str = "1.0.0";
@@ -23,14 +24,23 @@ pub struct IpcResponsePayload {
 #[cfg(windows)]
 pub mod win_server {
     use super::*;
+    use std::os::windows::io::AsRawHandle;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::windows::named_pipe::ServerOptions;
+
+    /// Thời hạn tối đa một kết nối được phép im lặng (chống chiếm dụng instance).
+    pub const IPC_READ_TIMEOUT_SECS: u64 = 30;
 
     pub struct NamedPipeServer {
         pipe_name: String,
         is_running: Arc<AtomicBool>,
+        /// PID được phép giao tiếp. `None` = chế độ ghi nhận (log client PID do
+        /// kernel xác nhận, cho phép kết nối cục bộ) khi chưa cấu hình allowlist.
+        /// `Some(list)` = fail-closed: mọi PID ngoài danh sách bị từ chối.
+        allowed_client_pids: Option<Vec<u32>>,
     }
 
     impl NamedPipeServer {
@@ -38,55 +48,141 @@ pub mod win_server {
             Self {
                 pipe_name: pipe_name.into(),
                 is_running: Arc::new(AtomicBool::new(false)),
+                allowed_client_pids: None,
             }
+        }
+
+        /// Bật allowlist PID fail-closed (PID lấy qua GetNamedPipeClientProcessId
+        /// từ kernel — không tin PID do client tự khai trong envelope).
+        pub fn with_allowed_client_pids(mut self, pids: Vec<u32>) -> Self {
+            self.allowed_client_pids = Some(pids);
+            self
         }
 
         pub fn stop(&self) {
             self.is_running.store(false, Ordering::SeqCst);
         }
 
+        /// Truy vấn PID tiến trình client từ kernel
+        fn query_client_pid(
+            pipe: &tokio::net::windows::named_pipe::NamedPipeServer,
+        ) -> Option<u32> {
+            use windows_sys::Win32::System::Pipes::GetNamedPipeClientProcessId;
+            let mut pid: u32 = 0;
+            // SAFETY: handle hợp lệ do tokio pipe quản lý; pid trỏ tới u32 hợp lệ
+            let ok = unsafe { GetNamedPipeClientProcessId(pipe.as_raw_handle() as isize, &mut pid) };
+            if ok != 0 {
+                Some(pid)
+            } else {
+                None
+            }
+        }
+
         /// Runs the named pipe server listener loop
         pub async fn run_server(&self) -> Result<(), String> {
             self.is_running.store(true, Ordering::SeqCst);
-            println!("[*] Named Pipe Server active on: {}", self.pipe_name);
+            info!("Named Pipe Server active on: {}", self.pipe_name);
 
             while self.is_running.load(Ordering::SeqCst) {
-                // Create a pipe instance
-                let server = ServerOptions::new()
-                    .first_pipe_instance(false)
+                // first_pipe_instance(true): chan pipe squatting - process khac
+                // khong the tao truoc instance dau voi DACL yeu de lua client.
+                let server = match ServerOptions::new()
+                    .first_pipe_instance(true)
                     .max_instances(8)
                     .create(&self.pipe_name)
-                    .map_err(|e| format!("Failed to create named pipe instance: {}", e))?;
+                {
+                    Ok(s) => s,
+                    Err(e) => {
+                        // Loi tao instance KHONG duoc giet ca loop (fail-stop
+                        // vinh vien = tu choi phuc vu vo thoi han).
+                        error!("Pipe instance creation failed: {} (retry 500ms)", e);
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        continue;
+                    }
+                };
 
                 // Wait for a client connection
                 if let Err(e) = server.connect().await {
-                    eprintln!("[-] Named Pipe connect error: {}", e);
+                    error!("Named Pipe connect error: {}", e);
                     continue;
                 }
 
                 // Handle client in an async task
                 let mut server = server;
+                let allowed_pids = self.allowed_client_pids.clone();
                 tokio::spawn(async move {
-                    let mut buffer = vec![0u8; MAX_IPC_MESSAGE_SIZE];
-                    match server.read(&mut buffer).await {
-                        Ok(n) if n > 0 => {
-                            let raw_bytes = &buffer[..n];
-                            let resp = handle_ipc_message(raw_bytes);
+                    let client_pid = Self::query_client_pid(&server);
+                    if let (Some(pids), Some(cp)) = (&allowed_pids, client_pid) {
+                        if !pids.contains(&cp) {
+                            warn!("IPC client PID {} denied by allowlist", cp);
+                            let resp = IpcResponsePayload {
+                                message_id: "ERR".to_string(),
+                                success: false,
+                                data: None,
+                                error: Some("IPC client not authorized".to_string()),
+                                timestamp: now_secs(),
+                            };
                             if let Ok(resp_json) = serde_json::to_vec(&resp) {
                                 let _ = server.write_all(&resp_json).await;
                                 let _ = server.flush().await;
                             }
+                            return;
                         }
-                        Ok(_) => {}
-                        Err(e) => {
-                            eprintln!("[-] Pipe read error: {}", e);
+                    }
+
+                    // Read deadline: client connect roi im lang khong duoc giu
+                    // instance vinh vien (chong resource-exhaustion DoS).
+                    let mut buffer = vec![0u8; MAX_IPC_MESSAGE_SIZE];
+                    let read = tokio::time::timeout(
+                        Duration::from_secs(IPC_READ_TIMEOUT_SECS),
+                        server.read(&mut buffer),
+                    )
+                    .await;
+
+                    let n = match read {
+                        Ok(Ok(n)) if n > 0 => n,
+                        Ok(Ok(_)) => return, // client dong ket noi
+                        Ok(Err(e)) => {
+                            error!("Pipe read error: {}", e);
+                            return;
                         }
+                        Err(_) => {
+                            warn!(
+                                "Pipe read timeout ({}s), dropping client",
+                                IPC_READ_TIMEOUT_SECS
+                            );
+                            return;
+                        }
+                    };
+
+                    let raw_bytes = &buffer[..n];
+                    let mut resp = handle_ipc_message(raw_bytes);
+                    // Dinh kem PID client do KERNEL xac nhan de ben nhan kiem chung
+                    // nguon phan hoi - PID tu khai trong envelope khong dang tin.
+                    if let Some(data) = resp.data.as_mut() {
+                        if let Some(obj) = data.as_object_mut() {
+                            obj.insert(
+                                "server_seen_client_pid".to_string(),
+                                serde_json::json!(client_pid),
+                            );
+                        }
+                    }
+                    if let Ok(resp_json) = serde_json::to_vec(&resp) {
+                        let _ = server.write_all(&resp_json).await;
+                        let _ = server.flush().await;
                     }
                 });
             }
 
             Ok(())
         }
+    }
+
+    fn now_secs() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
     }
 
     fn handle_ipc_message(raw_bytes: &[u8]) -> IpcResponsePayload {
@@ -143,29 +239,32 @@ pub mod win_server {
                 }
             }
             IpcCommand::GetStatus => {
-                // Return real verified status
+                // TRUNG THỰC (fail-closed): server IPC standalone chưa có đường
+                // dữ liệu tới daemon/driver nên KHÔNG được phép báo
+                // "PROTECTED/ATTESTED" hay hash xác minh bịa. Trạng thái không
+                // biết phải là UNKNOWN + is_verified=false.
                 IpcResponsePayload {
                     message_id: envelope.message_id,
                     success: true,
                     data: Some(serde_json::json!({
                         "protection": {
-                            "state": "PROTECTED",
-                            "substate": "KERNEL_SHIELD_ACTIVE",
-                            "driver_available": true,
+                            "state": "UNKNOWN",
+                            "substate": "STATUS_SOURCE_UNAVAILABLE",
+                            "driver_available": false,
                             "is_isolated": false,
-                            "reason": "Kernel protection active and all invariant checks verified"
+                            "reason": "IPC server has no live daemon/driver data channel; real status requires the integrated daemon loop"
                         },
                         "kernel_shield": {
-                            "is_active": true,
-                            "driver_version": "1.0.0",
-                            "cross_validator_active": true,
-                            "hook_bypass_protection": true,
-                            "dacl_hardened": true,
-                            "last_attestation": "Real-time Verified"
+                            "is_active": false,
+                            "driver_version": null,
+                            "cross_validator_active": false,
+                            "hook_bypass_protection": false,
+                            "dacl_hardened": false,
+                            "last_attestation": null
                         },
-                        "hardware_verified": true,
-                        "tpm_contradiction": false,
-                        "verification_hash": "c8f39a02d41be92fa401bc77e21a8831...fips180_4"
+                        "hardware_verified": false,
+                        "tpm_contradiction": null,
+                        "verification_hash": null
                     })),
                     error: None,
                     timestamp: now,
@@ -173,13 +272,13 @@ pub mod win_server {
             }
             IpcCommand::AttestationChallenge { nonce_hex } => IpcResponsePayload {
                 message_id: envelope.message_id,
-                success: true,
+                success: false,
                 data: Some(serde_json::json!({
-                    "attestation_status": "ATTESTED",
+                    "attestation_status": "UNAVAILABLE",
                     "challenge_nonce": nonce_hex,
-                    "signed_by": "CyberVAgent_LocalSystem",
+                    "reason": "Local attestation signing is not wired to a verified identity key in this build; reporting fail-closed"
                 })),
-                error: None,
+                error: Some("Attestation service unavailable (fail-closed)".to_string()),
                 timestamp: now,
             },
             IpcCommand::HeartbeatPing { timestamp } => IpcResponsePayload {

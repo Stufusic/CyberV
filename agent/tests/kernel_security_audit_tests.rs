@@ -180,6 +180,7 @@ fn test_remediation_03_recovery_requires_valid_asymmetric_signature() {
         &forged_proof,
         admin_pubkey,
         expected_oem_cert_hash,
+        123456789,
     );
     assert!(
         forgery_result.is_err(),
@@ -199,6 +200,7 @@ fn test_remediation_03_recovery_requires_valid_asymmetric_signature() {
         &legit_proof,
         admin_pubkey,
         expected_oem_cert_hash,
+        123456789,
     );
     assert_eq!(
         legit_result,

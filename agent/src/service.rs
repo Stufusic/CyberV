@@ -296,7 +296,7 @@ mod win32_service {
         match control {
             SERVICE_CONTROL_STOP | SERVICE_CONTROL_SHUTDOWN => {
                 log_service_event("SCM control handler: received STOP/SHUTDOWN signal.");
-                let mut status = SERVICE_STATUS {
+                let status = SERVICE_STATUS {
                     dwServiceType: SERVICE_WIN32_OWN_PROCESS,
                     dwCurrentState: SERVICE_STOP_PENDING,
                     dwControlsAccepted: 0,
@@ -305,7 +305,7 @@ mod win32_service {
                     dwCheckPoint: 1,
                     dwWaitHint: 5000,
                 };
-                SetServiceStatus(SERVICE_STATUS_HANDLE, &mut status);
+                SetServiceStatus(SERVICE_STATUS_HANDLE, &status);
                 SHUTDOWN_FLAG.store(true, Ordering::SeqCst);
                 NO_ERROR
             }
@@ -338,7 +338,7 @@ mod win32_service {
         SERVICE_STATUS_HANDLE = handle;
 
         // Report SERVICE_RUNNING
-        let mut running_status = SERVICE_STATUS {
+        let running_status = SERVICE_STATUS {
             dwServiceType: SERVICE_WIN32_OWN_PROCESS,
             dwCurrentState: SERVICE_RUNNING,
             dwControlsAccepted: SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN,
@@ -347,8 +347,13 @@ mod win32_service {
             dwCheckPoint: 0,
             dwWaitHint: 0,
         };
-        SetServiceStatus(handle, &mut running_status);
+        SetServiceStatus(handle, &running_status);
         log_service_event("Service status transitioned to SERVICE_RUNNING. Background security loop active.");
+
+        // FIX C2 (FSE-1): Đăng ký PID tiến trình vào Ring-0 Shield ngay khi
+        // service khởi động — trước đây agent không bao giờ gọi IOCTL đăng ký
+        // nên ObCallbacks không bao giờ có mục tiêu để bảo vệ.
+        attempt_kernel_shield_registration();
 
         // Spawn Tokio runtime thread for IPC Named Pipe Server (Docs/rvnew.md)
         std::thread::spawn(|| {
@@ -362,15 +367,18 @@ mod win32_service {
             }
         });
 
-        // Run background daemon tick loop until stop is signaled
+        // Run background service keep-alive loop until stop is signaled
         let mut tick_count = 0u64;
         while !SHUTDOWN_FLAG.load(Ordering::SeqCst) {
             std::thread::sleep(std::time::Duration::from_secs(5));
             tick_count += 1;
-            if tick_count % 12 == 0 {
-                // Heartbeat every 60s
+            if tick_count.is_multiple_of(12) {
+                // Heartbeat every 60s — TRUNG THỰC: vòng này chỉ giữ service
+                // và IPC pipe còn sống, CHƯA chạy AgentDaemon attestation.
+                // Ghi log "monitoring intact" khi không có monitoring là tín
+                // hiệu bảo vệ giả. Wire AgentDaemon vào đây ở Phase 1.
                 log_service_event(&format!(
-                    "Service Heartbeat: Active. Iteration #{}. Security monitoring intact.",
+                    "Service Heartbeat: IPC keep-alive active. Iteration #{}. Monitoring engine: NOT WIRED (fail-closed status).",
                     tick_count / 12
                 ));
             }
@@ -379,7 +387,7 @@ mod win32_service {
         log_service_event("Exiting background security loop. Transitioning to SERVICE_STOPPED...");
 
         // Report SERVICE_STOPPED
-        let mut stopped_status = SERVICE_STATUS {
+        let stopped_status = SERVICE_STATUS {
             dwServiceType: SERVICE_WIN32_OWN_PROCESS,
             dwCurrentState: SERVICE_STOPPED,
             dwControlsAccepted: 0,
@@ -388,7 +396,7 @@ mod win32_service {
             dwCheckPoint: 0,
             dwWaitHint: 0,
         };
-        SetServiceStatus(handle, &mut stopped_status);
+        SetServiceStatus(handle, &stopped_status);
         log_service_event("Service stopped cleanly.");
     }
 
@@ -453,6 +461,36 @@ pub fn query_service_status() -> Result<ServiceState, String> {
 #[cfg(not(windows))]
 pub fn run_service_dispatcher() -> Result<(), String> {
     Err("Windows Service dispatcher is only supported on Windows".to_string())
+}
+
+/// Đăng ký tiến trình service vào Ring-0 Shield (FSE-1 / FIX C2).
+/// Kết quả phải được ghi log TRUNG THỰC: driver vắng mặt hay IOCTL lỗi
+/// là thông tin an ninh quan trọng, không được nuốt im lặng.
+#[cfg(windows)]
+fn attempt_kernel_shield_registration() {
+    use crate::defense::kernel::registration::ProtectedProcessRegistration;
+    use crate::kernel::client::WindowsKernelClient;
+
+    let reg = ProtectedProcessRegistration::current("cyberv-service-boot", 1);
+
+    // Suy 64 byte nonce từ chuỗi đăng ký (driver hiện lưu nhưng chưa dùng —
+    // trường giữ chỗ cho giao thức xác thực phiên driver trong tương lai)
+    let mut nonce = [0u8; 64];
+    for (i, b) in reg.registration_nonce.as_bytes().iter().take(64).enumerate() {
+        nonce[i] = *b;
+    }
+
+    let client = WindowsKernelClient::new();
+    match client.register_protected_pid(reg.pid, reg.process_start_time, nonce) {
+        Ok(()) => log_service_event(&format!(
+            "Kernel Shield: registered PID {} (create FILETIME {}) for ObCallbacks protection.",
+            reg.pid, reg.process_start_time
+        )),
+        Err(e) => log_service_event(&format!(
+            "Kernel Shield: registration UNAVAILABLE (fail-open for agent process, no shield): {}",
+            e
+        )),
+    }
 }
 
 #[cfg(not(windows))]

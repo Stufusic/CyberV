@@ -48,13 +48,15 @@ impl IdentityBindingEngine {
         let enclave_pubkey_sha512 = Self::compute_sha512_hex(enclave_pubkey);
         let binding_nonce_hex = bytes_to_hex(nonce);
 
-        // Combined proof: H(tpm_ak || pcr_digest || enclave_pubkey || nonce)
-        let mut hasher = Sha512::new();
-        hasher.update(tpm_ak_pub);
-        hasher.update(pcr_digest);
-        hasher.update(enclave_pubkey);
-        hasher.update(nonce);
-        let combined_proof_digest = bytes_to_hex(&hasher.finalize());
+        // Combined proof: H(len(tpm_ak)||tpm_ak || len(pcr)||pcr || len(ak)||ak || nonce)
+        // M6/L6 fix: length-prefix mọi thành phần — không thể nhập nhằng ranh giới
+        // giữa các byte-array có nội dung khác nhau.
+        let combined_proof_digest = compute_combined_digest(
+            tpm_ak_pub,
+            pcr_digest,
+            enclave_pubkey,
+            nonce,
+        );
 
         IdentityBindingProof {
             tpm_ak_pub_sha512,
@@ -87,14 +89,25 @@ impl IdentityBindingEngine {
             return false;
         }
 
-        // Kiểm tra digest tổng hợp
-        let mut hasher = Sha512::new();
-        hasher.update(tpm_ak_pub);
-        hasher.update(pcr_digest);
-        hasher.update(enclave_pubkey);
-        hasher.update(nonce);
-        let expected = bytes_to_hex(&hasher.finalize());
+        // Kiểm tra digest tổng hợp (cùng encoding length-prefixed khi tạo)
+        let expected = compute_combined_digest(tpm_ak_pub, pcr_digest, enclave_pubkey, nonce);
 
         proof.combined_proof_digest == expected
     }
+}
+
+/// H(len(a)||a || len(b)||b || len(c)||c || nonce) — canonical, không nhập nhằng
+fn compute_combined_digest(
+    tpm_ak_pub: &[u8],
+    pcr_digest: &[u8],
+    enclave_pubkey: &[u8],
+    nonce: &[u8; 32],
+) -> String {
+    let mut hasher = Sha512::new();
+    for part in [tpm_ak_pub, pcr_digest, enclave_pubkey] {
+        hasher.update((part.len() as u32).to_be_bytes());
+        hasher.update(part);
+    }
+    hasher.update(nonce);
+    bytes_to_hex(&hasher.finalize())
 }

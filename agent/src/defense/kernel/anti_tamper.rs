@@ -62,8 +62,10 @@ impl AntiTamperManager {
         // 2. Kiểm tra các nỗ lực can thiệp handle trái phép bị chặn
         if telemetry.has_tampering_attempts() {
             is_tampering_detected = true;
-            let penalty = (telemetry.total_blocked() * 500)
-                .max(telemetry.driver_unload_attempts * 2000)
+            let penalty = telemetry
+                .total_blocked()
+                .saturating_mul(500)
+                .max(telemetry.driver_unload_attempts.saturating_mul(2000))
                 .min(5000);
             defense_score = defense_score.saturating_sub(penalty);
 

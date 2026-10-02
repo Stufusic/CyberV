@@ -101,3 +101,50 @@ impl VersionPolicyValidator {
         }
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn evaluate_rejects_downgrade_and_replay() {
+        assert_eq!(
+            VersionPolicyValidator::evaluate(3, 1),
+            VersionPolicyDecision::RejectedDowngrade { current: 3, target: 1 }
+        );
+        assert_eq!(
+            VersionPolicyValidator::evaluate(2, 2),
+            VersionPolicyDecision::RejectedReplaySameVersion { version: 2 }
+        );
+        assert_eq!(
+            VersionPolicyValidator::evaluate(1, 2),
+            VersionPolicyDecision::AllowedUpgrade { increment: 1 }
+        );
+    }
+
+    /// Bất biến trung tâm: software_current < tpm_counter là snapshot rollback
+    /// (HCE-5) — phải phát hiện bất kể target có hợp lệ hay không.
+    #[test]
+    fn hardware_counter_contradiction_always_wins() {
+        // Software behind counter: rollback detected
+        assert!(matches!(
+            VersionPolicyValidator::evaluate_with_hardware_counter(
+                40,
+                41,
+                42,
+                crate::trust::tpm::TpmAssuranceType::HardwareBacked
+            ),
+            HardwareVersionDecision::ContradictionRollbackDetected { .. }
+        ));
+        // Kể cả khi target trùng counter (không "lùi" theo software):
+        // chỉ khi software_current == counter mới được advance an toàn
+        let ok = VersionPolicyValidator::evaluate_with_hardware_counter(
+            42,
+            43,
+            42,
+            crate::trust::tpm::TpmAssuranceType::HardwareBacked
+        );
+        assert!(matches!(ok, HardwareVersionDecision::AllowedUpgradeWithCommitMarker { .. }));
+    }
+}

@@ -29,6 +29,21 @@ pub struct MmrInclusionProof {
 impl MmrInclusionProof {
     /// Xác minh bằng chứng bao hàm trong MMR
     pub fn verify(&self) -> bool {
+        // 0. L8: mọi giá trị hex phải có độ dài 128 và là hex hợp lệ —
+        // proof đến từ nguồn không tin cậy, không được phép nhập nhằng payload.
+        let hex_ok = |v: &str| v.len() == 128 && v.bytes().all(|b| b.is_ascii_hexdigit());
+        if !hex_ok(&self.leaf_hash)
+            || !hex_ok(&self.peak_hash)
+            || !hex_ok(&self.mmr_root)
+            || !self.all_peaks.iter().all(|p| hex_ok(p))
+            || !self
+                .path_to_peak
+                .iter()
+                .all(|st| hex_ok(&st.sibling_hash))
+        {
+            return false;
+        }
+
         // 1. Tái tạo đỉnh Peak từ lá và đường đi
         let mut current_hash = self.leaf_hash.clone();
         for step in &self.path_to_peak {
@@ -230,10 +245,12 @@ pub fn bag_peaks(peaks: &[String]) -> String {
         return peaks[0].clone();
     }
 
-    // Hash gom các đỉnh từ phải sang trái
+    // Hash gom các đỉnh từ phải sang trái — prefix độ dài từng đỉnh (L8):
+    // loại nhập nhằng ["ab","c"] vs ["a","bc"] khi nối byte thô.
     let mut hasher = Sha512::new();
     hasher.update(DOMAIN_MMR_PEAK_BAG);
     for peak in peaks {
+        hasher.update((peak.len() as u32).to_be_bytes());
         hasher.update(peak.as_bytes());
     }
     format!("{:x}", hasher.finalize())

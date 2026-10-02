@@ -18,26 +18,40 @@ use cyberv_agent::security::assurance::AssuranceLevel;
 
 #[test]
 fn test_01_update_manifest_signature_verification_success() {
+    use ed25519_dalek::SigningKey;
+
+    let sk = SigningKey::from_bytes(&[0x42u8; 32]);
     let manifest = UpdatePackageManifest {
         version: 2,
         package_sha512: "sha512_package_digest".to_string(),
         release_key_id: "release_key_2026_primary".to_string(),
-        manifest_signature_hex: "valid_ecdsa_sig".to_string(),
+        manifest_signature_hex: String::new(),
         target_arch: "x86_64".to_string(),
-    };
-    assert!(manifest.verify_signature("release_key_2026_primary"));
+    }
+    .sign(&sk);
+    assert!(manifest.verify_signature(&sk.verifying_key()));
 }
 
 #[test]
 fn test_02_update_manifest_wrong_release_key_fails() {
+    use ed25519_dalek::SigningKey;
+
+    let sk = SigningKey::from_bytes(&[0x42u8; 32]);
+    let rogue = SigningKey::from_bytes(&[0x99u8; 32]);
     let manifest = UpdatePackageManifest {
         version: 2,
         package_sha512: "sha512_package_digest".to_string(),
-        release_key_id: "rogue_attacker_key".to_string(),
-        manifest_signature_hex: "fake_sig".to_string(),
+        release_key_id: "release_key_2026_primary".to_string(),
+        manifest_signature_hex: String::new(),
         target_arch: "x86_64".to_string(),
-    };
-    assert!(!manifest.verify_signature("release_key_2026_primary"));
+    }
+    .sign(&sk);
+    // Chữ ký do khóa lạ tạo ra (hoặc khóa pinned khác khóa ký) phải bị từ chối
+    assert!(!manifest.verify_signature(&rogue.verifying_key()));
+    // Chữ ký giả (không phải Ed25519 hex hợp lệ của pinned key) phải bị từ chối
+    let mut forged = manifest.clone();
+    forged.manifest_signature_hex = "00".repeat(64);
+    assert!(!forged.verify_signature(&sk.verifying_key()));
 }
 
 #[test]

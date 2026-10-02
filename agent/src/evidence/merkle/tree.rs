@@ -91,6 +91,11 @@ impl MerkleEvidenceTree {
 }
 
 /// Dựng cây nhị phân cân bằng từ danh sách các nút lá
+///
+/// RFC 6962 SPLIT-NODE RULE (L7 fix): nút lẻ KHÔNG còn được nhân bản.
+/// Cây n phần tử được chia tại lớn nhất power-of-two < n rồi hợp nhất —
+/// loại bỏ root-equivalence giữa [.., X] và [.., X, X] cũng như sibling
+/// tự trỏ trong proof. Cây một lá: root chính là hash của lá (RFC 6962).
 pub fn build_balanced_tree(label: &str, mut nodes: Vec<MerkleNode>) -> MerkleNode {
     if nodes.is_empty() {
         return MerkleNode::new_leaf(label, b"EMPTY_SUBTREE");
@@ -99,44 +104,62 @@ pub fn build_balanced_tree(label: &str, mut nodes: Vec<MerkleNode>) -> MerkleNod
     // Sắp xếp các lá tăng dần theo nhãn để bảo đảm tính tất định
     nodes.sort_by(|a, b| a.label.cmp(&b.label));
 
+    build_subtree(label, &nodes)
+}
+
+/// Lớn nhất power-of-two nhỏ hơn n (n >= 2)
+fn largest_power_of_two_below(n: usize) -> usize {
+    debug_assert!(n >= 2);
+    usize::next_power_of_two(n) >> 1
+}
+
+fn build_subtree(label: &str, nodes: &[MerkleNode]) -> MerkleNode {
     if nodes.len() == 1 {
-        let only = nodes.pop().unwrap();
-        return MerkleNode::new_internal(label, only.clone(), only);
+        // Cây một lá: root = hash lá. Nhãn nhánh của caller chỉ dùng khi
+        // cần internal node; MerkleEvidenceTree luôn có >= 1 lá nên root
+        // của subtree nhiều lá vẫn mang label của nhánh (xem build()).
+        return nodes[0].clone();
     }
 
-    let mut current_level = nodes;
-    let mut round = 0;
-    while current_level.len() > 1 {
-        let is_last_round = current_level.len() <= 2;
-        let mut next_level = Vec::new();
-        let mut i = 0;
-        while i < current_level.len() {
-            if i + 1 < current_level.len() {
-                let left = current_level[i].clone();
-                let right = current_level[i + 1].clone();
-                let parent_label = if is_last_round {
-                    label.to_string()
-                } else {
-                    format!("{}_r{}_b{}", label, round, next_level.len())
-                };
-                next_level.push(MerkleNode::new_internal(parent_label, left, right));
-                i += 2;
-            } else {
-                // Nút lẻ được nhân bản làm lá kép (RFC 6962 standard)
-                let left = current_level[i].clone();
-                let right = current_level[i].clone();
-                let parent_label = if is_last_round {
-                    label.to_string()
-                } else {
-                    format!("{}_r{}_b_dup{}", label, round, next_level.len())
-                };
-                next_level.push(MerkleNode::new_internal(parent_label, left, right));
-                i += 1;
-            }
-        }
-        current_level = next_level;
-        round += 1;
+    let split = largest_power_of_two_below(nodes.len());
+    let left = build_subtree(&format!("{}_l", label), &nodes[..split]);
+    let right = build_subtree(&format!("{}_r", label), &nodes[split..]);
+    MerkleNode::new_internal(label.to_string(), left, right)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn leaf(label: &str) -> MerkleNode {
+        MerkleNode::new_leaf(label, label.as_bytes())
     }
 
-    current_level.pop().unwrap()
+    /// REGRESSION L7: root([X]) KHÔNG được bằng root([X, X]) như quy tắc
+    /// nhân bản cũ (internal(X, X)).
+    #[test]
+    fn single_leaf_root_differs_from_duplicated_pair_root() {
+        let one = build_balanced_tree("t", vec![leaf("X")]);
+        let two = build_balanced_tree("t", vec![leaf("X"), leaf("X")]);
+        assert_ne!(one.hash_hex(), two.hash_hex());
+    }
+
+    #[test]
+    fn split_node_rule_deterministic_and_order_insensitive() {
+        let labels = ["A", "B", "C", "D", "E"];
+        let t1 = build_balanced_tree("r", labels.iter().map(|l| leaf(l)).collect());
+        let t2 = build_balanced_tree("r", labels.iter().rev().map(|l| leaf(l)).collect());
+        assert_eq!(t1.hash_hex(), t2.hash_hex());
+
+        // Nhiều hơn power-of-two: 5 lá (split 4 + 1)
+        let t3 = build_balanced_tree("r", vec![leaf("A"), leaf("B"), leaf("C"), leaf("D"), leaf("E")]);
+        assert_eq!(t3.hash_hex(), t1.hash_hex());
+    }
+
+    /// Nhiều lá: root node mang label của subtree (hợp đồng của MerkleEvidenceTree)
+    #[test]
+    fn multi_leaf_root_keeps_subtree_label() {
+        let t = build_balanced_tree("component_root", vec![leaf("a"), leaf("b")]);
+        assert_eq!(t.label, "component_root");
+    }
 }

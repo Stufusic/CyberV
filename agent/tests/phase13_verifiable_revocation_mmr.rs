@@ -8,8 +8,13 @@ use cyberv_agent::transparency::{
     EventType, MerkleMountainRange, RevocationEvent, RevocationVerificationResult,
     RevocationVerifier, SignedCheckpoint,
 };
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
+
+/// Khóa thẩm quyền giả lập đã được PIN trong cấu hình agent
+fn pinned_authority() -> VerifyingKey {
+    SigningKey::from_bytes(&[0xA5u8; 32]).verifying_key()
+}
 
 #[test]
 fn test_01_single_event_append_and_mmr_root() {
@@ -216,7 +221,14 @@ fn test_09_full_revocation_flow_confirmed() {
     );
 
     // Client xác minh lệnh thu hồi
-    let result = RevocationVerifier::verify_revocation(&checkpoint, &event, &proof, target_device);
+    let result = RevocationVerifier::verify_revocation(
+        &checkpoint,
+        &event,
+        &proof,
+        target_device,
+        &authority_key.verifying_key(),
+        "cyberv-log",
+    );
 
     match result {
         RevocationVerificationResult::RevocationConfirmed {
@@ -254,8 +266,14 @@ fn test_10_revocation_proof_wrong_device_id_rejected() {
     );
 
     // Server kiểm tra cho device khác
-    let result =
-        RevocationVerifier::verify_revocation(&checkpoint, &event, &proof, "device-innocent-99");
+    let result = RevocationVerifier::verify_revocation(
+        &checkpoint,
+        &event,
+        &proof,
+        "device-innocent-99",
+        &authority_key.verifying_key(),
+        "cyberv-log",
+    );
 
     assert!(matches!(
         result,
@@ -271,11 +289,16 @@ fn test_11_anti_rogue_admin_silent_unrevoke_detected() {
     let was_previously_revoked = true;
     let unrevoke_event = None; // Không có event trong MMR
 
+    // Guard yêu cầu khóa thẩm quyền pin (short-circuit trước khi dùng, nhưng
+    // API bắt buộc cung cấp để mọi đường đi đều phải pin khóa).
+    let pinned = SigningKey::generate(&mut OsRng);
     let result = RevocationVerifier::verify_unrevocation_guard(
         db_status_active,
         was_previously_revoked,
         unrevoke_event,
         "device-x",
+        &pinned.verifying_key(),
+        "cyberv-log",
     );
 
     match result {
@@ -317,6 +340,8 @@ fn test_12_authorized_unrevocation_confirmed() {
         true,
         Some((&event, &proof, &checkpoint)),
         device_id,
+        &authority_key.verifying_key(),
+        "cyberv-log",
     );
 
     assert_eq!(
@@ -400,4 +425,86 @@ fn test_15_end_to_end_transparency_log_integration() {
     let proof = mmr.generate_proof(5).unwrap();
     assert!(proof.verify());
     assert_eq!(proof.mmr_root, checkpoint.mmr_root);
+}
+
+
+#[test]
+fn test_13_rogue_key_checkpoint_rejected() {
+    // Attacker tự sinh keypair rồi tự ký checkpoint hợp lệ —
+    // phải bị từ chối vì khóa nhúng không khớp khóa thẩm quyền được PIN.
+    let rogue_key = SigningKey::generate(&mut OsRng);
+    let mut mmr = MerkleMountainRange::new();
+
+    let event = RevocationEvent::new(
+        "device-victim-77",
+        EventType::DeviceRevoked,
+        "state_hash_77",
+        "FORGED_BY_ROGUE",
+        1757077200,
+        "prev",
+    );
+    let leaf_idx = mmr.append(event.entry_hash());
+    let proof = mmr.generate_proof(leaf_idx).unwrap();
+    let forged_checkpoint = SignedCheckpoint::sign(
+        "cyberv-log",
+        mmr.tree_size(),
+        mmr.root(),
+        1757077200,
+        &rogue_key,
+    );
+    // Chữ ký tự nhất quán (verify() cũ sẽ pass!) nhưng khóa không phải khóa pin
+    assert!(forged_checkpoint.verify());
+    assert!(!forged_checkpoint.verify_with_pinned_authority(&pinned_authority()));
+
+    let result = RevocationVerifier::verify_revocation(
+        &forged_checkpoint,
+        &event,
+        &proof,
+        "device-victim-77",
+        &pinned_authority(),
+        "cyberv-log",
+    );
+    assert!(matches!(
+        result,
+        RevocationVerificationResult::VerificationFailed(_)
+    ));
+}
+
+#[test]
+fn test_14_unrevoke_event_of_other_device_rejected() {
+    // Event UNREVOKED hợp lệ (đúng khóa pin) nhưng thuộc device khác —
+    // guard phải bbind device_id nên phải phát hiện Rogue Admin Tamper.
+    let authority_key = SigningKey::from_bytes(&[0xA5u8; 32]);
+    let mut mmr = MerkleMountainRange::new();
+
+    let event = RevocationEvent::new(
+        "device-OTHER-99",
+        EventType::DeviceUnrevoked,
+        "state_hash_other",
+        "SECURITY_CLEARANCE_RESTORED",
+        1757077200,
+        "prev_hash",
+    );
+    let leaf_idx = mmr.append(event.entry_hash());
+    let proof = mmr.generate_proof(leaf_idx).unwrap();
+    let checkpoint = SignedCheckpoint::sign(
+        "cyberv-log",
+        mmr.tree_size(),
+        mmr.root(),
+        1757077200,
+        &authority_key,
+    );
+
+    let result = RevocationVerifier::verify_unrevocation_guard(
+        true,
+        true,
+        Some((&event, &proof, &checkpoint)),
+        "device-pardoned-01",
+        &authority_key.verifying_key(),
+        "cyberv-log",
+    );
+    assert!(matches!(
+        result,
+        RevocationVerificationResult::RogueAdminTamperDetected { .. }
+    ));
 }

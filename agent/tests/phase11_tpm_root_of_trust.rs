@@ -16,7 +16,7 @@ use cyberv_agent::trust::platform::{
 };
 use cyberv_agent::trust::tpm::{
     HashAlgorithm, MockTpmDetector, MockTpmProvider, PcrBank, PcrPolicy, TpmDetector, TpmError,
-    TpmProvider, TpmStatus,
+    TpmIdentityKey, TpmProvider, TpmStatus,
 };
 
 #[test]
@@ -60,21 +60,39 @@ fn test_03_tpm_degraded_capability_handling() {
 }
 
 #[test]
-fn test_04_hardware_backed_key_generation() {
+fn test_04_simulated_provider_reports_honest_key_flags() {
     let mut provider = MockTpmProvider::new_standard("INTC");
     let key = provider
         .generate_key("device-identity-key-01")
-        .expect("Tạo khóa TPM thành công");
+        .expect("Tạo khóa thành công");
 
     assert!(key.key_reference.starts_with("tpm://"));
     assert_eq!(key.public_key_hex.len(), 64);
+    // TRUNG THỰC: khóa của provider mô phỏng là phần mềm trong RAM —
+    // không được phép mạo danh khóa TPM non-exportable.
+    assert!(!key.is_hardware_backed);
+    assert!(key.is_exportable);
+
+    // Ký thử thông điệp bằng khóa mô phỏng
+    let data = b"CYBERV_ATTESTATION_CHALLENGE_PAYLOAD";
+    let sig_hex = key.sign(data).expect("Ký bằng khóa mô phỏng thành công");
+    assert_eq!(sig_hex.len(), 128); // Ed25519 signature hex
+}
+
+#[test]
+fn test_04b_tpm_managed_key_satisfies_protection_invariant() {
+    // Khóa TPM thật (chỉ key_reference + public key, không có private key trong RAM)
+    // mới được phép mang cờ hardware-backed / non-exportable.
+    let key = TpmIdentityKey::new_tpm_managed(
+        "tpm://pcp/device-identity-key",
+        "INTC",
+        "ab".repeat(32),
+    );
     assert!(key.is_hardware_backed);
     assert!(!key.is_exportable);
-
-    // Ký thử thông điệp qua TPM key
-    let data = b"CYBERV_ATTESTATION_CHALLENGE_PAYLOAD";
-    let sig_hex = key.sign(data).expect("Ký qua TPM thành công");
-    assert_eq!(sig_hex.len(), 128); // Ed25519 signature hex
+    assert!(key.assert_hardware_protection().is_ok());
+    // Không có handle TBS thật -> ký phải trả lỗi, tuyệt đối không ký giả
+    assert!(key.sign(b"data").is_err());
 }
 
 #[test]
@@ -82,12 +100,20 @@ fn test_05_key_non_exportability_invariant() {
     let mut provider = MockTpmProvider::new_standard("MSFT");
     let key = provider
         .generate_key("device-identity-key-02")
-        .expect("Tạo khóa TPM thành công");
+        .expect("Tạo khóa thành công");
 
-    // Khóa phải thỏa mãn bất biến: hardware_backed == true và exportable == false
-    assert!(key.assert_hardware_protection().is_ok());
+    // Khóa phần mềm mô phỏng KHÔNG được qua cổng bảo vệ phần cứng (trung thực)
+    assert!(key.assert_hardware_protection().is_err());
 
-    let mut forged_key = key.clone();
+    // Chỉ khóa TPM-managed thật mới thỏa mãn bất biến non-exportable
+    let real_key = TpmIdentityKey::new_tpm_managed(
+        "tpm://pcp/device-identity-key-02",
+        "MSFT",
+        "cd".repeat(32),
+    );
+    assert!(real_key.assert_hardware_protection().is_ok());
+
+    let mut forged_key = real_key.clone();
     forged_key.is_exportable = true; // Thử phá vỡ bất biến
     assert!(forged_key.assert_hardware_protection().is_err());
 }
@@ -302,9 +328,20 @@ fn test_15_hybrid_device_identity_assurance_scoring() {
     let tpm_key = provider.generate_key("hw-key-1").unwrap();
     let hw_identity = HybridDeviceIdentity::Hardware(HardwareIdentity::new(tpm_key));
 
-    assert!(hw_identity.is_hardware_backed());
-    assert_eq!(hw_identity.assurance_level(), AssuranceLevel::HardwareTpm);
-    assert_eq!(hw_identity.assurance_level().score(), 10000);
+    // TRUNG THỰC: khóa từ mock provider là phần mềm -> assurance phải hạ tầng
+    assert!(hw_identity.is_hardware_backed()); // variant Hardware
+    assert_eq!(hw_identity.assurance_level(), AssuranceLevel::SoftwareVault);
+    assert_eq!(hw_identity.assurance_level().score(), 6000);
+
+    // Chỉ khóa TPM-managed thật mới đạt HardwareTpm
+    let real_key = TpmIdentityKey::new_tpm_managed(
+        "tpm://pcp/hw-key-real",
+        "INTC",
+        "ef".repeat(32),
+    );
+    let real_identity = HybridDeviceIdentity::Hardware(HardwareIdentity::new(real_key));
+    assert_eq!(real_identity.assurance_level(), AssuranceLevel::HardwareTpm);
+    assert_eq!(real_identity.assurance_level().score(), 10000);
 
     // Đánh giá Platform Trust State với TPM + SecureBoot
     let state_tpm = PlatformTrustState::evaluate(

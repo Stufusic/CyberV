@@ -7,6 +7,7 @@
 use super::circuit::CIRCUIT_VERSION;
 use super::prover::ZkProof;
 use super::statement::DevicePolicy;
+use ed25519_dalek::{Signature, VerifyingKey};
 use std::collections::HashSet;
 use thiserror::Error;
 
@@ -40,6 +41,8 @@ pub enum VerifierError {
 
     #[error("Bằng chứng bị hỏng hoặc cam kết không hợp lệ")]
     CorruptedProof,
+    #[error("Chữ ký thiết bị trên proof không hợp lệ (không phải thiết bị giữ khóa private)")]
+    DeviceSignatureInvalid,
 }
 
 /// Bộ theo dõi Nonce chống tấn công phát lại (Anti-Replay Nonce Tracker)
@@ -74,6 +77,7 @@ impl ZkVerifier {
         expected_policy: &DevicePolicy,
         expected_nonce: &str,
         tracker: &mut NonceTracker,
+        expected_device_pubkey: &VerifyingKey,
     ) -> Result<bool, VerifierError> {
         // 1. Kiểm tra phiên bản mạch (Không chấp nhận old circuit hoặc cross-version)
         if proof.circuit_version != CIRCUIT_VERSION {
@@ -130,9 +134,39 @@ impl ZkVerifier {
             return Err(VerifierError::CorruptedProof);
         }
 
-        // Đánh dấu Nonce đã được tiêu thụ thành công
+        // 7. H7 fix: kiểm tra CHỮ KÝ DEVICE IDENTITY trên toàn bộ ngữ cảnh
+        // proof. Commitment tự nó chỉ là hash các input công khai — không có
+        // soundness; chỉ thiết bị giữ khóa private mới ký được binding này.
+        let sig_bytes = hex_decode_64(&proof.device_signature_hex)
+            .ok_or(VerifierError::DeviceSignatureInvalid)?;
+        let signature = Signature::from_bytes(&sig_bytes);
+        expected_device_pubkey
+            .verify_strict(&proof.canonical_device_signature_bytes(), &signature)
+            .map_err(|_| VerifierError::DeviceSignatureInvalid)?;
+
+        // Đánh dấu Nonce đã được tiêu thụ thành công (chỉ sau khi mọi kiểm tra pass)
         tracker.mark_used(expected_nonce);
 
         Ok(true)
     }
+}
+
+fn hex_decode_64(s: &str) -> Option<[u8; 64]> {
+    let bytes = s.as_bytes();
+    if bytes.len() != 128 {
+        return None;
+    }
+    fn hex_val(b: u8) -> Option<u8> {
+        match b {
+            b'0'..=b'9' => Some(b - b'0'),
+            b'a'..=b'f' => Some(b - b'a' + 10),
+            b'A'..=b'F' => Some(b - b'A' + 10),
+            _ => None,
+        }
+    }
+    let mut out = [0u8; 64];
+    for (i, chunk) in bytes.as_chunks::<2>().0.iter().enumerate() {
+        out[i] = (hex_val(chunk[0])? << 4) | hex_val(chunk[1])?;
+    }
+    Some(out)
 }

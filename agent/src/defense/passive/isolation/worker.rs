@@ -4,7 +4,9 @@
 //! "Worker Daemon (AppContainer / Low Integrity): Handles Supabase HTTP, JSON, Dashboard IPC.
 //! An exploited parser gives the attacker zero private keys, zero TPM access, zero driver handle."
 
-use super::protocol::{BrokerRpcCommand, RpcEnvelope, CURRENT_IPC_PROTOCOL_VERSION};
+use super::protocol::{
+    compute_frame_mac, BrokerRpcCommand, RpcEnvelope, CURRENT_IPC_PROTOCOL_VERSION,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -20,10 +22,17 @@ pub struct NetworkWorkerDaemon {
     pub session_id: u64,
     pub current_sequence_number: u64,
     pub sandbox_profile: WorkerSandboxProfile,
+    /// Khóa phiên chia sẻ với Broker từ kết quả bắt tay — dùng để MAC frame
+    session_key: [u8; 32],
 }
 
 impl NetworkWorkerDaemon {
     pub fn new(session_id: u64) -> Self {
+        Self::with_session_key(session_id, super::protocol::generate_session_key())
+    }
+
+    /// Tạo worker với khóa phiên có trước (kết quả bắt tay từ Broker)
+    pub fn with_session_key(session_id: u64, session_key: [u8; 32]) -> Self {
         Self {
             session_id,
             current_sequence_number: 1,
@@ -33,10 +42,16 @@ impl NetworkWorkerDaemon {
                 has_driver_access: false, // Bị hạn chế hoàn toàn
                 has_vault_access: false,  // Không có khóa giải mã
             },
+            session_key,
         }
     }
 
-    /// Tạo khung RPC gửi sang Core Broker
+    pub fn session_key(&self) -> &[u8; 32] {
+        &self.session_key
+    }
+
+    /// Tạo khung RPC gửi sang Core Broker — MAC tính thật bằng session key,
+    /// phủ toàn bộ nội dung frame (không còn tag mock).
     pub fn create_rpc_request(
         &mut self,
         request_id: u64,
@@ -44,17 +59,20 @@ impl NetworkWorkerDaemon {
         payload: Vec<u8>,
     ) -> RpcEnvelope {
         let seq = self.current_sequence_number;
-        self.current_sequence_number += 1;
+        self.current_sequence_number = self.current_sequence_number.saturating_add(1);
 
-        RpcEnvelope {
+        let envelope = RpcEnvelope {
             protocol_version: CURRENT_IPC_PROTOCOL_VERSION,
             session_id: self.session_id,
             request_id,
             sequence_number: seq,
             command,
             payload,
-            auth_tag: [0xAA; 16], // Mock MAC/Poly1305 tag
-        }
+            auth_tag: [0u8; 16],
+        };
+
+        let auth_tag = compute_frame_mac(&self.session_key, &envelope);
+        RpcEnvelope { auth_tag, ..envelope }
     }
 
     /// Kiểm tra quyền truy cập: Worker tuyệt đối không thể đọc file Vault trực tiếp

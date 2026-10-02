@@ -240,6 +240,7 @@ fn test_stress_03_recovery_cryptographic_signature_fuzzing() {
             &legit_proof,
             &legit_admin_pubkey,
             expected_cert_hash,
+            1000 + i as u64,
         );
         assert_eq!(legit_res, Ok(DeviceLifecycleState::ActiveAttested));
         accepted_legits += 1;
@@ -265,6 +266,7 @@ fn test_stress_03_recovery_cryptographic_signature_fuzzing() {
             &forged_proof,
             &legit_admin_pubkey,
             expected_cert_hash,
+            1000 + i as u64,
         );
         assert!(
             forged_res.is_err(),

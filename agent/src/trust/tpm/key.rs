@@ -26,8 +26,29 @@ pub struct TpmIdentityKey {
 }
 
 impl TpmIdentityKey {
-    /// Tạo đối tượng TpmIdentityKey mô phỏng hoặc thực tế
-    pub fn new_hardware_backed(
+    /// Khóa TPM THẬT (non-exportable): chỉ giữ key_reference và public key,
+    /// KHÔNG giữ private key trong RAM. Ký thật sẽ đi qua TBS/PCP handle
+    /// (tích hợp ở Phase 2) — cho đến khi đó, sign() trả lỗi thay vì giả vờ.
+    pub fn new_tpm_managed(
+        key_reference: impl Into<String>,
+        tpm_manufacturer: impl Into<String>,
+        public_key_hex: impl Into<String>,
+    ) -> Self {
+        Self {
+            key_reference: key_reference.into(),
+            public_key_hex: public_key_hex.into(),
+            is_hardware_backed: true,
+            is_exportable: false, // Bất biến an ninh: TPM key không thể export
+            tpm_manufacturer: tpm_manufacturer.into(),
+            inner_signing_key: None,
+        }
+    }
+
+    /// Khóa MÔ PHỎNG: private key là Ed25519 phần mềm nằm trong RAM.
+    /// Cờ is_hardware_backed/is_exportable báo TRUNG THỰC (false/true) —
+    /// tuyệt đối không được mạo danh khóa TPM non-exportable (cạm bẫy
+    /// "hardware-backed trên giấy" từng khiến khóa clone được giữ nguyên quyền).
+    pub fn new_simulated_software(
         key_reference: impl Into<String>,
         tpm_manufacturer: impl Into<String>,
         signing_key: SigningKey,
@@ -42,8 +63,8 @@ impl TpmIdentityKey {
         Self {
             key_reference: key_reference.into(),
             public_key_hex,
-            is_hardware_backed: true,
-            is_exportable: false, // Bất biến an ninh: TPM key không thể export
+            is_hardware_backed: false,
+            is_exportable: true, // Khóa phần mềm trong RAM: bản chất là exportable
             tpm_manufacturer: tpm_manufacturer.into(),
             inner_signing_key: Some(signing_key),
         }

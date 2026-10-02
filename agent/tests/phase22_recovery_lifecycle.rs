@@ -13,20 +13,14 @@ use cyberv_agent::defense::recovery::{
     TransitionDetector,
 };
 use cyberv_agent::security::assurance::AssuranceLevel;
-use sha2::{Digest, Sha512};
-use std::fmt::Write;
 
-fn helper_admin_signature(challenge_id: &str, new_pcr_sha512: &str, admin_pubkey: &[u8]) -> String {
-    let mut hasher = Sha512::new();
-    hasher.update(challenge_id.as_bytes());
-    hasher.update(new_pcr_sha512.as_bytes());
-    hasher.update(admin_pubkey);
-    let out = hasher.finalize();
-    let mut s = String::with_capacity(out.len() * 2);
-    for b in out {
-        let _ = write!(s, "{:02x}", b);
-    }
-    s
+/// INV-003: chữ ký phục hồi PHẢI là Ed25519 bất đối xứng với khóa admin 32-byte.
+/// Helper cũ tính SHA-512 trên input công khai đã bị xóa vì ai cũng tự tính được.
+fn helper_admin_signature(
+    challenge: &RecoveryChallenge,
+    admin_signing_key: &ed25519_dalek::SigningKey,
+) -> String {
+    RecoveryManager::sign_recovery_challenge(challenge, admin_signing_key)
 }
 
 #[test]
@@ -130,18 +124,17 @@ fn test_10_recovery_challenge_generation() {
 
 #[test]
 fn test_11_verify_and_re_attest_success() {
+    use ed25519_dalek::SigningKey;
+
     let nonce = [0x42u8; 32];
     let prev_pcr = b"OLD_PCR_STATE";
     let new_pcr = b"NEW_PCR_STATE";
-    let admin_pub = b"CENTRAL_ADMIN_ED25519_KEY";
+    let admin_signing_key = SigningKey::from_bytes(&[0x11u8; 32]);
+    let admin_pub = admin_signing_key.verifying_key().as_bytes().to_vec();
     let oem_cert_hash = "asus_oem_bios_cert_hash_sha512";
 
     let challenge = RecoveryManager::create_challenge("dev-pc-001", nonce, prev_pcr, new_pcr, 1000);
-    let admin_sig = helper_admin_signature(
-        &challenge.challenge_id,
-        &challenge.new_pcr_sha512,
-        admin_pub,
-    );
+    let admin_sig = helper_admin_signature(&challenge, &admin_signing_key);
 
     let proof = RecoveryProof {
         challenge_id: challenge.challenge_id.clone(),
@@ -150,8 +143,63 @@ fn test_11_verify_and_re_attest_success() {
     };
 
     let result =
-        RecoveryManager::verify_and_re_attest(&challenge, &proof, admin_pub, oem_cert_hash);
+        RecoveryManager::verify_and_re_attest(&challenge, &proof, &admin_pub, oem_cert_hash, 1000);
     assert_eq!(result.unwrap(), DeviceLifecycleState::ActiveAttested);
+}
+
+#[test]
+fn test_11b_expired_recovery_challenge_rejected() {
+    use ed25519_dalek::SigningKey;
+
+    let nonce = [0x43u8; 32];
+    let admin_signing_key = SigningKey::from_bytes(&[0x11u8; 32]);
+    let admin_pub = admin_signing_key.verifying_key().as_bytes().to_vec();
+
+    let challenge = RecoveryManager::create_challenge("dev-pc-001", nonce, b"P1", b"P2", 1000);
+    let admin_sig = RecoveryManager::sign_recovery_challenge(&challenge, &admin_signing_key);
+    let proof = RecoveryProof {
+        challenge_id: challenge.challenge_id.clone(),
+        admin_signature_sha512: admin_sig,
+        oem_update_cert_hash: "oem_hash".to_string(),
+    };
+
+    // Challenge hợp lệ ở thời điểm 1000, nhưng quá 15 phút (900s) phải bị từ chối
+    let result = RecoveryManager::verify_and_re_attest(
+        &challenge,
+        &proof,
+        &admin_pub,
+        "oem_hash",
+        1000 + 901,
+    );
+    assert_eq!(result.unwrap_err(), "Recovery challenge expired");
+}
+
+#[test]
+fn test_11b_short_admin_key_rejected_without_fallback() {
+    use rand::RngCore;
+
+    // INV-003: khóa không phải 32-byte phải bị từ chối cứng —
+    // đường "legacy" cũ cho phép ai cũng tự tính được chữ ký.
+    let mut nonce = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut nonce);
+    let challenge = RecoveryManager::create_challenge("dev-pc-001", nonce, b"P1", b"P2", 1000);
+    let proof = RecoveryProof {
+        challenge_id: challenge.challenge_id.clone(),
+        admin_signature_sha512: "00".repeat(64),
+        oem_update_cert_hash: "oem_hash".to_string(),
+    };
+
+    let result = RecoveryManager::verify_and_re_attest(
+        &challenge,
+        &proof,
+        b"legacy_mock_key",
+        "oem_hash",
+        1000,
+    );
+    assert_eq!(
+        result.unwrap_err(),
+        "Admin public key must be a 32-byte Ed25519 key"
+    );
 }
 
 #[test]
@@ -168,7 +216,7 @@ fn test_12_verify_and_re_attest_challenge_id_mismatch_fails() {
     };
 
     let result =
-        RecoveryManager::verify_and_re_attest(&challenge, &proof, admin_pub, oem_cert_hash);
+        RecoveryManager::verify_and_re_attest(&challenge, &proof, admin_pub, oem_cert_hash, 1000);
     assert_eq!(result.unwrap_err(), "Challenge ID mismatch");
 }
 
@@ -185,15 +233,20 @@ fn test_13_verify_and_re_attest_oem_cert_mismatch_fails() {
     };
 
     let result =
-        RecoveryManager::verify_and_re_attest(&challenge, &proof, admin_pub, "expected_valid_cert");
+        RecoveryManager::verify_and_re_attest(&challenge, &proof, admin_pub, "expected_valid_cert", 1000);
     assert_eq!(result.unwrap_err(), "OEM update certificate hash mismatch");
 }
 
 #[test]
 fn test_14_verify_and_re_attest_invalid_admin_signature_fails() {
+    use ed25519_dalek::SigningKey;
+
     let nonce = [0x42u8; 32];
     let challenge = RecoveryManager::create_challenge("dev-pc-001", nonce, b"P1", b"P2", 1000);
-    let admin_pub = b"ADMIN_KEY";
+    let admin_pub = SigningKey::from_bytes(&[0x77u8; 32])
+        .verifying_key()
+        .as_bytes()
+        .to_vec();
     let oem_cert_hash = "oem_hash";
 
     let proof = RecoveryProof {
@@ -202,8 +255,13 @@ fn test_14_verify_and_re_attest_invalid_admin_signature_fails() {
         oem_update_cert_hash: oem_cert_hash.to_string(),
     };
 
-    let result =
-        RecoveryManager::verify_and_re_attest(&challenge, &proof, admin_pub, oem_cert_hash);
+    let result = RecoveryManager::verify_and_re_attest(
+        &challenge,
+        &proof,
+        &admin_pub,
+        oem_cert_hash,
+        1000,
+    );
     assert_eq!(result.unwrap_err(), "Invalid admin authorization signature");
 }
 

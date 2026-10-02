@@ -5,8 +5,8 @@
 //! Nonce Mutation, and Concurrent Race Condition Robustness.
 
 use cyberv_agent::kernel::{
-    KernelObservationPayload, KernelPciDevice, KernelProbeProvider, KernelShieldTelemetry,
-    MockKernelClient, WindowsKernelClient,
+    parse_kernel_observation_bytes, KernelObservationPayload, KernelPciDevice,
+    KernelProbeProvider, MockKernelClient, WindowsKernelClient, KERNEL_MAX_DEVICES,
 };
 use std::sync::Arc;
 use std::thread;
@@ -29,11 +29,31 @@ fn create_test_pci(ven: u16, dev: u16, bus: u8, dev_id: u8, func: u8, sn: Option
 
 #[test]
 fn test_01_fuzz_malformed_truncated_observation_buffer() {
-    // Graceful fallback khi buffer bị cắt ngắn hoặc không đủ header 16 bytes
-    let client = WindowsKernelClient::new();
-    let obs = client.query_kernel_observation();
-    // Trong môi trường test không có driver active, trả về None an toàn tuyệt đối
-    assert!(obs.is_none() || obs.is_some());
+    // PHIÊN BẢN CŨ LÀ TAUTOLOGY: assert!(obs.is_none() || obs.is_some()) luôn đúng.
+    // Giờ assert thật trên pure parser (xem thêm unit test trong kernel/client.rs):
+    // frame cắt ngắn / thiếu header / bytes_returned lệch phải trả None.
+    fn build_frame(device_count: u32) -> Vec<u8> {
+        let mut frame = Vec::new();
+        frame.extend_from_slice(&1u32.to_le_bytes()); // driver_version = ABI v1
+        frame.extend_from_slice(&device_count.to_le_bytes());
+        frame.extend_from_slice(&0u64.to_le_bytes());
+        for _ in 0..device_count {
+            frame.extend_from_slice(&[0u8; 78]); // KERNEL_PCI_DEVICE_SIZE
+        }
+        frame
+    }
+
+    let frame = build_frame(4);
+    // bytes_returned chỉ đủ header trong khi frame khai báo 4 devices -> None
+    assert!(parse_kernel_observation_bytes(&frame, 16).is_none());
+    // bytes_returned nhỏ hơn cần thiết -> None
+    assert!(parse_kernel_observation_bytes(&frame, 16 + 3 * 78).is_none());
+    // Buffer nhỏ hơn header -> None
+    assert!(parse_kernel_observation_bytes(&frame[..8], 8).is_none());
+    // Frame đầy đủ -> Some với đúng số devices
+    let full = parse_kernel_observation_bytes(&frame, frame.len()).expect("full frame");
+    assert_eq!(full.devices.len(), 4);
+    assert!(full.devices.len() <= KERNEL_MAX_DEVICES);
 }
 
 #[test]
@@ -107,8 +127,11 @@ fn test_05_fuzz_concurrent_multi_threaded_probing() {
 
 #[test]
 fn test_06_fuzz_shield_telemetry_counter_saturation() {
-    // Kiểm tra tràn số (saturation) cho bộ đếm số liệu phòng thủ
-    let telem = KernelShieldTelemetry {
+    // Kiểm tra TRẠNG THÁI SATURATION thật: bộ đếm ở biên u32::MAX không được
+    // panic (debug) hay wrap (release) khi qua phép cộng/nhân của anti-tamper.
+    use cyberv_agent::defense::kernel::telemetry::ShieldTelemetry;
+
+    let telem = ShieldTelemetry {
         protected_pid: 4, // System PID
         blocked_terminations: u32::MAX,
         blocked_vm_reads: u32::MAX - 1,
@@ -118,9 +141,9 @@ fn test_06_fuzz_shield_telemetry_counter_saturation() {
         is_shield_active: true,
     };
 
-    assert_eq!(telem.blocked_terminations, u32::MAX);
-    assert_eq!(telem.blocked_vm_reads, u32::MAX - 1);
-    assert!(telem.is_shield_active);
+    // Saturating: tổng phải kẹt ở u32::MAX, không wrap về số nhỏ
+    assert_eq!(telem.total_blocked(), u32::MAX);
+    assert!(telem.has_tampering_attempts());
 }
 
 #[test]

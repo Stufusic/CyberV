@@ -16,6 +16,10 @@ pub struct WdacPolicyConfig {
     pub allow_cyberv: bool,
     pub deny_unsigned: bool,
     pub break_glass_recovery_enabled: bool,
+    /// TBS hash (hex) cua CyberV Production Code Signing CA.
+    /// `None` = CHUA PROVISION: generator se chen marker ro rang thay vi
+    /// hash cua chuoi rong (sha256("")), va validate se tu choi deploy.
+    pub cyberv_signer_tbs: Option<String>,
 }
 
 impl Default for WdacPolicyConfig {
@@ -28,8 +32,20 @@ impl Default for WdacPolicyConfig {
             allow_cyberv: true,
             deny_unsigned: true,
             break_glass_recovery_enabled: true,
+            cyberv_signer_tbs: None, // phai duoc provision tu cert that truoc khi deploy
         }
     }
+}
+
+/// Escape cac ky tu dac biet XML trong gia tri chen vao template —
+/// policy_id den tu cau hinh ben ngoai, khong duoc phep inject node XML.
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }
 
 pub struct WdacPolicyGenerator;
@@ -79,7 +95,7 @@ impl WdacPolicyGenerator {
             <CertRoot Type="Wellknown" Value="05" />
         </Signer>
         <Signer ID="ID_SIGNER_CYBERV" Name="CyberV Corporation Production Code Signing CA">
-            <CertRoot Type="TBS" Value="E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855" />
+            <CertRoot Type="TBS" Value="{cyberv_tbs}" />
         </Signer>
     </Signers>
     <SigningScenarios>
@@ -101,9 +117,13 @@ impl WdacPolicyGenerator {
         </SigningScenario>
     </SigningScenarios>
 </SiPolicy>"#,
-            policy_id = config.policy_id,
+            policy_id = xml_escape(&config.policy_id),
             audit_rule = audit_rule,
-            break_glass_rule = break_glass_rule
+            break_glass_rule = break_glass_rule,
+            cyberv_tbs = match &config.cyberv_signer_tbs {
+                Some(tbs) => xml_escape(tbs),
+                None => "UNPROVISIONED_CYBERV_SIGNER_TBS".to_string(),
+            }
         )
     }
 
@@ -111,6 +131,11 @@ impl WdacPolicyGenerator {
     pub fn validate_cipolicy_xml(xml: &str) -> Result<(), &'static str> {
         if !xml.contains("<SiPolicy xmlns=\"urn:schemas-microsoft-com:sipolicy\"") {
             return Err("Missing valid SiPolicy root namespace");
+        }
+        // M7: CertRoot cua CyberV phai la TBS hex that su da duoc provision —
+        // sha256("") hoac marker chua provision khong duoc phep ra khoi generator.
+        if xml.contains("UNPROVISIONED_CYBERV_SIGNER_TBS") || xml.contains("E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855") {
+            return Err("CyberV signer TBS is unprovisioned; refusing to deploy policy");
         }
         if !xml.contains("ID_SIGNER_WHQL") || !xml.contains("ID_SIGNER_CYBERV") {
             return Err("Policy must explicitly contain WHQL and CyberV signers");

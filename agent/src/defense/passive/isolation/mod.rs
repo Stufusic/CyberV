@@ -13,12 +13,13 @@ pub mod worker;
 
 pub use admission::{
     decode_hex, encode_hex, BrokerPolicyAdmissionController, PolicyAdmissionError,
-    SignedPolicyEnvelope,
+    SignedPolicyEnvelope, DOMAIN_POLICY_ADMISSION,
 };
 
 pub use broker::{BrokerError, BrokerStatus, CoreBroker, EXPECTED_WORKER_APPCONTAINER_SID};
 pub use protocol::{
-    BrokerRpcCommand, IpcFrameError, RpcEnvelope, RpcSessionValidator,
-    CURRENT_IPC_PROTOCOL_VERSION, MAX_IPC_FRAME_SIZE,
+    compute_frame_mac, generate_session_key, BrokerRpcCommand, IpcFrameError, RpcEnvelope,
+    RpcSessionValidator, CURRENT_IPC_PROTOCOL_VERSION, DOMAIN_BROKER_FRAME_MAC,
+    MAX_IPC_FRAME_SIZE,
 };
 pub use worker::{NetworkWorkerDaemon, WorkerSandboxProfile};

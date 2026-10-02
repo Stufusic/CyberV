@@ -6,7 +6,9 @@
 use super::models::{
     CollectionSource, ComponentType, Confidence, NormalizedComponent, RawComponent,
 };
+use sha2::{Digest, Sha512};
 use std::collections::BTreeMap;
+use std::fmt::Write;
 
 /// Kiểm tra xem một chuỗi có phải là giá trị rác thường gặp từ BIOS/OEM hay không
 pub fn is_oem_junk_value(val: &str) -> bool {
@@ -190,6 +192,24 @@ pub fn normalize_memory(raw: &RawComponent, source: CollectionSource) -> Normali
     }
 }
 
+pub const DOMAIN_SERIAL_COMMITMENT: &[u8] = b"CYBERV/SERIAL/COMMITMENT/v1\0";
+
+/// Cam kết một chiều của số serial: SHA-512 kèm domain separator.
+/// Chỉ commitment được ghi vào attributes/canonical_id và rời khỏi máy —
+/// serial thô tuyệt đối không được truyền lên mạng (privacy invariant).
+pub fn serial_commitment_hex(serial: &str) -> String {
+    let mut hasher = Sha512::new();
+    hasher.update(DOMAIN_SERIAL_COMMITMENT);
+    hasher.update((serial.len() as u32).to_be_bytes());
+    hasher.update(serial.as_bytes());
+    let out = hasher.finalize();
+    let mut s = String::with_capacity(out.len() * 2);
+    for b in out {
+        let _ = write!(s, "{:02x}", b);
+    }
+    s
+}
+
 /// Tầng 2: Identity Normalization cho Storage (Physical Disks - rv plan1.md #6)
 pub fn normalize_storage(raw: &RawComponent, source: CollectionSource) -> NormalizedComponent {
     let mut attrs = BTreeMap::new();
@@ -209,6 +229,8 @@ pub fn normalize_storage(raw: &RawComponent, source: CollectionSource) -> Normal
     attrs.insert("model".to_string(), model.clone());
 
     // 2. Serial Number (rv plan1.md #7: nếu thiếu thì hạ confidence, không crash)
+    // Serial thô KHÔNG bao giờ được đưa vào attributes hay canonical_id —
+    // chỉ cam kết SHA-512 domain-separated được phép truyền lên mạng.
     let serial = raw
         .attributes
         .get("serial")
@@ -217,8 +239,9 @@ pub fn normalize_storage(raw: &RawComponent, source: CollectionSource) -> Normal
         .filter(|s| !is_oem_junk_value(s));
 
     let canonical_serial_part = if let Some(s) = serial {
-        attrs.insert("serial".to_string(), s.clone());
-        s
+        let commitment = serial_commitment_hex(&s);
+        attrs.insert("serial_commitment".to_string(), commitment.clone());
+        commitment[..32].to_string()
     } else {
         // Serial không khả dụng (vd: trong VM hoặc đĩa ảo)
         confidence = Confidence::Medium;
@@ -281,11 +304,14 @@ pub fn normalize_motherboard(raw: &RawComponent, source: CollectionSource) -> No
         .unwrap_or_else(|| "unknown".to_string());
     attrs.insert("product".to_string(), prod.clone());
 
-    // 3. Serial Number
+    // 3. Serial Number — chỉ cam kết một chiều được phép rời khỏi máy
     if let Some(sn) = raw.attributes.get("serial").and_then(|v| v.as_str()) {
         let norm = normalize_transport_string(sn);
         if !is_oem_junk_value(&norm) {
-            attrs.insert("serial".to_string(), norm);
+            attrs.insert(
+                "serial_commitment".to_string(),
+                serial_commitment_hex(&norm),
+            );
         } else {
             confidence = Confidence::Medium;
         }
@@ -358,10 +384,20 @@ mod tests {
         };
 
         let norm = normalize_storage(&raw, CollectionSource::WindowsWmi);
-        // Canonical ID không được chứa "disk-3"
+        // Canonical ID không được chứa "disk-3" (index OS) và KHÔNG được chứa serial thô
+        let expected_commitment = serial_commitment_hex("s5p2nf0r123456");
         assert_eq!(
             norm.canonical_id,
-            "disk:samsung 980 pro:s5p2nf0r123456:1000204886016"
+            format!(
+                "disk:samsung 980 pro:{}:1000204886016",
+                &expected_commitment[..32]
+            )
+        );
+        assert!(!norm.canonical_id.contains("s5p2nf0r123456"));
+        assert!(!norm.attributes.contains_key("serial"));
+        assert_eq!(
+            norm.attributes.get("serial_commitment").map(String::as_str),
+            Some(expected_commitment.as_str())
         );
         assert_eq!(norm.confidence, Confidence::High);
     }

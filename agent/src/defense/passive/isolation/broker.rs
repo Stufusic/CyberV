@@ -4,12 +4,17 @@
 //! "Core Broker (SYSTEM / High Integrity): Holds Vault, TPM, Driver, Local Policy.
 //! Zero network sockets, zero arbitrary HTTP/JSON parsers from Internet."
 
-use super::protocol::{BrokerRpcCommand, IpcFrameError, RpcEnvelope, RpcSessionValidator};
+use super::protocol::{
+    generate_session_key, BrokerRpcCommand, IpcFrameError, RpcEnvelope, RpcSessionValidator,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Danh sách SID được ủy quyền kết nối vào Core Broker
 pub const EXPECTED_WORKER_APPCONTAINER_SID: &str = "S-1-15-2-CYBERV-WORKER-DAEMON";
+
+/// Giới hạn số phiên đồng thời — chặn cạn kiệt bộ nhớ bởi đăng ký phiên vô hạn
+pub const MAX_ACTIVE_SESSIONS: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BrokerStatus {
@@ -26,6 +31,7 @@ pub enum BrokerError {
     UnauthorizedClientSid(String),
     UntrustedExecutable(String),
     SessionNotFound(u64),
+    SessionLimitReached,
     ProtocolError(IpcFrameError),
     VaultAccessDenied,
 }
@@ -77,13 +83,23 @@ impl CoreBroker {
         Ok(())
     }
 
-    /// Đăng ký một phiên IPC mới sau khi bắt tay Diffie-Hellman thành công
-    pub fn register_session(&mut self, session_id: u64) {
-        self.sessions
-            .insert(session_id, RpcSessionValidator::new(session_id));
+    /// Đăng ký một phiên IPC mới: sinh khóa phiên ngẫu nhiên (mô phỏng kết quả
+    /// bắt tay key-exchange) và trả về cho worker. Phiên mới yêu cầu MAC frame.
+    /// Trả lỗi khi vượt giới hạn phiên đồng thời (chặn DoS đăng ký phiên).
+    pub fn register_session(&mut self, session_id: u64) -> Result<[u8; 32], BrokerError> {
+        if self.sessions.len() >= MAX_ACTIVE_SESSIONS {
+            return Err(BrokerError::SessionLimitReached);
+        }
+        let session_key = generate_session_key();
+        self.sessions.insert(
+            session_id,
+            RpcSessionValidator::with_session_key(session_id, session_key),
+        );
+        Ok(session_key)
     }
 
-    /// Xử lý khung RPC gửi từ Worker
+    /// Xử lý khung RPC gửi từ Worker — frame phải mang MAC hợp lệ
+    /// (kiểm tra trong validate_and_advance) trước khi lệnh được thực thi.
     pub fn handle_rpc_frame(
         &mut self,
         envelope: &RpcEnvelope,

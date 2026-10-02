@@ -15,6 +15,12 @@ use cyberv_agent::privacy::{
     NonceTracker, SelectiveDisclosureClaim, SelectiveDisclosureEngine, SelectiveDisclosureError,
     VerifierError, ZkProver, ZkVerifier, CIRCUIT_VERSION,
 };
+use ed25519_dalek::SigningKey;
+
+/// Khóa định danh thiết bị dùng để ký proof (H7: signed attested claim)
+fn device_signing_key() -> SigningKey {
+    SigningKey::from_bytes(&[0x5Au8; 32])
+}
 
 /// Helper tạo Merkle tree chuẩn từ Mock Baseline
 fn create_test_merkle_tree() -> (MerkleEvidenceTree, String) {
@@ -63,7 +69,7 @@ fn test_01_valid_zk_proof_generation_and_verification() {
     let nonce = "challenge_nonce_abc123";
 
     // Prover tạo ZK proof
-    let proof = ZkProver::prove(&witness, &policy, &root_hex, nonce, CIRCUIT_VERSION)
+    let proof = ZkProver::prove(&witness, &policy, &root_hex, nonce, CIRCUIT_VERSION, &device_signing_key())
         .expect("Tạo ZK proof thành công");
 
     assert_eq!(proof.circuit_version, CIRCUIT_VERSION);
@@ -74,7 +80,7 @@ fn test_01_valid_zk_proof_generation_and_verification() {
 
     // Verifier kiểm tra proof
     let mut tracker = NonceTracker::new();
-    let verified = ZkVerifier::verify(&proof, &root_hex, &policy, nonce, &mut tracker)
+    let verified = ZkVerifier::verify(&proof, &root_hex, &policy, nonce, &mut tracker, &device_signing_key().verifying_key())
         .expect("Xác minh ZK proof thành công");
     assert!(verified);
 }
@@ -86,12 +92,12 @@ fn test_02_invalid_proof_commitment_rejected() {
     let policy = DevicePolicy::enterprise_baseline();
     let nonce = "nonce_1";
 
-    let mut proof = ZkProver::prove(&witness, &policy, &root_hex, nonce, CIRCUIT_VERSION).unwrap();
+    let mut proof = ZkProver::prove(&witness, &policy, &root_hex, nonce, CIRCUIT_VERSION, &device_signing_key()).unwrap();
     // Giả mạo cam kết proof
     proof.proof_commitment = "0".repeat(128);
 
     let mut tracker = NonceTracker::new();
-    let result = ZkVerifier::verify(&proof, &root_hex, &policy, nonce, &mut tracker);
+    let result = ZkVerifier::verify(&proof, &root_hex, &policy, nonce, &mut tracker, &device_signing_key().verifying_key());
     assert_eq!(result.unwrap_err(), VerifierError::CorruptedProof);
 }
 
@@ -102,11 +108,11 @@ fn test_03_wrong_root_rejected() {
     let policy = DevicePolicy::enterprise_baseline();
     let nonce = "nonce_2";
 
-    let proof = ZkProver::prove(&witness, &policy, &root_hex, nonce, CIRCUIT_VERSION).unwrap();
+    let proof = ZkProver::prove(&witness, &policy, &root_hex, nonce, CIRCUIT_VERSION, &device_signing_key()).unwrap();
 
     let wrong_root = "f".repeat(128);
     let mut tracker = NonceTracker::new();
-    let result = ZkVerifier::verify(&proof, &wrong_root, &policy, nonce, &mut tracker);
+    let result = ZkVerifier::verify(&proof, &wrong_root, &policy, nonce, &mut tracker, &device_signing_key().verifying_key());
 
     match result.unwrap_err() {
         VerifierError::RootMismatch { expected_root, .. } => {
@@ -123,13 +129,13 @@ fn test_04_wrong_policy_id_rejected() {
     let policy = DevicePolicy::enterprise_baseline();
     let nonce = "nonce_3";
 
-    let proof = ZkProver::prove(&witness, &policy, &root_hex, nonce, CIRCUIT_VERSION).unwrap();
+    let proof = ZkProver::prove(&witness, &policy, &root_hex, nonce, CIRCUIT_VERSION, &device_signing_key()).unwrap();
 
     let mut wrong_policy = policy.clone();
     wrong_policy.policy_id = "pol:wrong_policy_id".to_string();
 
     let mut tracker = NonceTracker::new();
-    let result = ZkVerifier::verify(&proof, &root_hex, &wrong_policy, nonce, &mut tracker);
+    let result = ZkVerifier::verify(&proof, &root_hex, &wrong_policy, nonce, &mut tracker, &device_signing_key().verifying_key());
 
     match result.unwrap_err() {
         VerifierError::PolicyMismatch {
@@ -148,13 +154,13 @@ fn test_05_wrong_policy_version_rejected() {
     let policy = DevicePolicy::enterprise_baseline();
     let nonce = "nonce_4";
 
-    let proof = ZkProver::prove(&witness, &policy, &root_hex, nonce, CIRCUIT_VERSION).unwrap();
+    let proof = ZkProver::prove(&witness, &policy, &root_hex, nonce, CIRCUIT_VERSION, &device_signing_key()).unwrap();
 
     let mut wrong_policy = policy.clone();
     wrong_policy.version = 99;
 
     let mut tracker = NonceTracker::new();
-    let result = ZkVerifier::verify(&proof, &root_hex, &wrong_policy, nonce, &mut tracker);
+    let result = ZkVerifier::verify(&proof, &root_hex, &wrong_policy, nonce, &mut tracker, &device_signing_key().verifying_key());
 
     match result.unwrap_err() {
         VerifierError::PolicyMismatch {
@@ -173,10 +179,10 @@ fn test_06_wrong_nonce_rejected() {
     let policy = DevicePolicy::enterprise_baseline();
     let nonce = "correct_nonce";
 
-    let proof = ZkProver::prove(&witness, &policy, &root_hex, nonce, CIRCUIT_VERSION).unwrap();
+    let proof = ZkProver::prove(&witness, &policy, &root_hex, nonce, CIRCUIT_VERSION, &device_signing_key()).unwrap();
 
     let mut tracker = NonceTracker::new();
-    let result = ZkVerifier::verify(&proof, &root_hex, &policy, "different_nonce", &mut tracker);
+    let result = ZkVerifier::verify(&proof, &root_hex, &policy, "different_nonce", &mut tracker, &device_signing_key().verifying_key());
 
     match result.unwrap_err() {
         VerifierError::NonceMismatch { expected_nonce, .. } => {
@@ -193,14 +199,14 @@ fn test_07_proof_replay_attack_rejected() {
     let policy = DevicePolicy::enterprise_baseline();
     let nonce = "replay_target_nonce";
 
-    let proof = ZkProver::prove(&witness, &policy, &root_hex, nonce, CIRCUIT_VERSION).unwrap();
+    let proof = ZkProver::prove(&witness, &policy, &root_hex, nonce, CIRCUIT_VERSION, &device_signing_key()).unwrap();
 
     let mut tracker = NonceTracker::new();
     // Lần 1: Thành công
-    assert!(ZkVerifier::verify(&proof, &root_hex, &policy, nonce, &mut tracker).unwrap());
+    assert!(ZkVerifier::verify(&proof, &root_hex, &policy, nonce, &mut tracker, &device_signing_key().verifying_key()).unwrap());
 
     // Lần 2: Tấn công phát lại cùng một proof và nonce -> Phải bị từ chối
-    let result = ZkVerifier::verify(&proof, &root_hex, &policy, nonce, &mut tracker);
+    let result = ZkVerifier::verify(&proof, &root_hex, &policy, nonce, &mut tracker, &device_signing_key().verifying_key());
     assert_eq!(
         result.unwrap_err(),
         VerifierError::NonceReplayed(nonce.to_string())
@@ -215,7 +221,7 @@ fn test_08_old_circuit_version_rejected() {
     let nonce = "nonce_circuit_0";
 
     // Thử tạo proof với phiên bản mạch cũ = 0
-    let result = ZkProver::prove(&witness, &policy, &root_hex, nonce, 0);
+    let result = ZkProver::prove(&witness, &policy, &root_hex, nonce, 0, &device_signing_key());
     assert!(result.is_err());
 }
 
@@ -226,11 +232,11 @@ fn test_09_cross_version_proof_rejected() {
     let policy = DevicePolicy::enterprise_baseline();
     let nonce = "nonce_cross_ver";
 
-    let mut proof = ZkProver::prove(&witness, &policy, &root_hex, nonce, CIRCUIT_VERSION).unwrap();
+    let mut proof = ZkProver::prove(&witness, &policy, &root_hex, nonce, CIRCUIT_VERSION, &device_signing_key()).unwrap();
     proof.circuit_version = 999; // Giả lập cross-version
 
     let mut tracker = NonceTracker::new();
-    let result = ZkVerifier::verify(&proof, &root_hex, &policy, nonce, &mut tracker);
+    let result = ZkVerifier::verify(&proof, &root_hex, &policy, nonce, &mut tracker, &device_signing_key().verifying_key());
     assert_eq!(
         result.unwrap_err(),
         VerifierError::VersionMismatch {
@@ -255,7 +261,7 @@ fn test_10_tampered_witness_merkle_proof_rejected() {
         step.sibling_hash_hex.push(new_char);
     }
 
-    let result = ZkProver::prove(&witness, &policy, &root_hex, nonce, CIRCUIT_VERSION);
+    let result = ZkProver::prove(&witness, &policy, &root_hex, nonce, CIRCUIT_VERSION, &device_signing_key());
     assert!(result.is_err());
 }
 
@@ -268,7 +274,7 @@ fn test_11_tpm_required_policy_fails_if_tpm_inactive() {
     let policy = DevicePolicy::enterprise_baseline(); // require_tpm = true
     let nonce = "nonce_tpm_test";
 
-    let result = ZkProver::prove(&witness, &policy, &root_hex, nonce, CIRCUIT_VERSION);
+    let result = ZkProver::prove(&witness, &policy, &root_hex, nonce, CIRCUIT_VERSION, &device_signing_key());
     assert!(matches!(
         result.unwrap_err(),
         cyberv_agent::privacy::ProverError::CircuitFailed(CircuitError::TpmRequirementFailed)
@@ -284,7 +290,7 @@ fn test_12_kernel_consistency_required_policy_fails_if_inconsistent() {
     let policy = DevicePolicy::enterprise_baseline(); // require_kernel_consistent = true
     let nonce = "nonce_kernel_test";
 
-    let result = ZkProver::prove(&witness, &policy, &root_hex, nonce, CIRCUIT_VERSION);
+    let result = ZkProver::prove(&witness, &policy, &root_hex, nonce, CIRCUIT_VERSION, &device_signing_key());
     assert!(matches!(
         result.unwrap_err(),
         cyberv_agent::privacy::ProverError::CircuitFailed(CircuitError::KernelRequirementFailed)
@@ -301,7 +307,7 @@ fn test_13_memory_threshold_policy_enforcement() {
     policy.min_memory_bytes = 16 * 1024 * 1024 * 1024; // Yêu cầu 16 GB
 
     let nonce = "nonce_ram_test";
-    let result = ZkProver::prove(&witness, &policy, &root_hex, nonce, CIRCUIT_VERSION);
+    let result = ZkProver::prove(&witness, &policy, &root_hex, nonce, CIRCUIT_VERSION, &device_signing_key());
     assert!(matches!(
         result.unwrap_err(),
         cyberv_agent::privacy::ProverError::CircuitFailed(CircuitError::InsufficientMemory { .. })
@@ -352,4 +358,49 @@ fn test_15_selective_disclosure_tampered_root_rejected() {
         result.unwrap_err(),
         SelectiveDisclosureError::RootMismatch(..)
     ));
+}
+
+#[test]
+fn test_16_forged_proof_without_device_private_key_rejected() {
+    // H7 REGRESSION: proof tự chế (commitment hash các input công khai) không
+    // kèm chữ ký device key hợp lệ PHẢI bị từ chối — trước đây verifier chỉ
+    // check "payload có chứa commitment" nên ai cũng forge được.
+    use ed25519_dalek::SigningKey as Key;
+
+    let (tree, root_hex) = create_test_merkle_tree();
+    let (witness, _) = create_valid_witness(&tree);
+    let policy = DevicePolicy::enterprise_baseline();
+    let nonce = "nonce_forged";
+
+    // Attacker ký bằng khóa KHÁC khóa thiết bị được pin
+    let attacker_key = Key::from_bytes(&[0x01u8; 32]);
+    let proof = ZkProver::prove(&witness, &policy, &root_hex, nonce, CIRCUIT_VERSION, &attacker_key)
+        .unwrap();
+    assert_eq!(proof.device_signature_hex.len(), 128);
+
+    let mut tracker = NonceTracker::new();
+    let result = ZkVerifier::verify(
+        &proof,
+        &root_hex,
+        &policy,
+        nonce,
+        &mut tracker,
+        &device_signing_key().verifying_key(),
+    );
+    assert!(matches!(result.unwrap_err(), VerifierError::DeviceSignatureInvalid));
+    // Nonce không bị đốt bởi proof không hợp lệ
+    assert!(!tracker.is_used(nonce));
+
+    // Proof với signature hex rác -> cũng bị chặn
+    let mut garbage = proof.clone();
+    garbage.device_signature_hex = "zz".repeat(64);
+    let result2 = ZkVerifier::verify(
+        &garbage,
+        &root_hex,
+        &policy,
+        nonce,
+        &mut tracker,
+        &device_signing_key().verifying_key(),
+    );
+    assert!(matches!(result2.unwrap_err(), VerifierError::DeviceSignatureInvalid));
 }

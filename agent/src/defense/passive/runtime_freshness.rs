@@ -11,6 +11,9 @@ pub enum FreshnessState {
     Fresh,
     Stale,
     Expired,
+    /// Đồng hồ lùi lại so với thời điểm quan sát: không thể quyết định độ tươi
+    /// (TTL/half-life bị vô hiệu) — phải được coi là không tin cậy, không phải Fresh.
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,8 +38,10 @@ impl EvidenceFreshness {
 
     pub fn evaluate_state(&self, current_time_ms: u64) -> FreshnessState {
         if current_time_ms < self.observed_at {
-            // Trường hợp đồng hồ lùi lại: coi như Fresh nhưng cảnh báo
-            return FreshnessState::Fresh;
+            // Trường hợp đồng hồ lùi lại (NTP chỉnh, VM resume, giả mạo):
+            // mọi bằng chứng quan sát được "tương lai" là không đáng tin —
+            // trả Unknown (fail-closed) thay vì Fresh (cũ) để TTL/decay có nghĩa.
+            return FreshnessState::Unknown;
         }
 
         let elapsed = current_time_ms - self.observed_at;

@@ -36,10 +36,18 @@ pub enum HybridDeviceIdentity {
 }
 
 impl HybridDeviceIdentity {
+    /// Mức đảm bảo báo TRUNG THỰC theo cờ thực của khóa: chỉ khi khóa thực sự
+    /// được quản lý bởi TPM non-exportable mới được tính HardwareTpm.
+    /// Khóa mô phỏng phần mềm (dù nằm trong variant Hardware) bị hạ xuống
+    /// SoftwareVault — chặn việc máy clone mượn danh "TPM-backed".
     pub fn assurance_level(&self) -> AssuranceLevel {
         match self {
-            HybridDeviceIdentity::Hardware(_) => AssuranceLevel::HardwareTpm,
-            HybridDeviceIdentity::Software(_) => AssuranceLevel::SoftwareVault,
+            HybridDeviceIdentity::Hardware(hw) if hw.key.is_hardware_backed => {
+                AssuranceLevel::HardwareTpm
+            }
+            HybridDeviceIdentity::Hardware(_) | HybridDeviceIdentity::Software(_) => {
+                AssuranceLevel::SoftwareVault
+            }
         }
     }
 

@@ -19,6 +19,9 @@ pub enum VaultShieldError {
 
     #[error("Lỗi I/O khi khóa hoặc truy cập vault: {0}")]
     IoError(String),
+
+    #[error("Vault shield chưa khóa baseline (lock_baseline) — trạng thái không xác minh được")]
+    NoBaseline,
 }
 
 /// Bộ bảo vệ tính toàn vẹn và khóa tệp Vault trên ổ đĩa
@@ -59,11 +62,14 @@ impl VaultShield {
         Ok(commitment)
     }
 
-    /// Kiểm tra xem tệp vault có bị thay thế hoặc sửa đổi trái phép hay không
+    /// Kiểm tra xem tệp vault có bị thay thế hoặc sửa đổi trái phép hay không.
+    /// FAIL-CLOSED (H6): chưa khóa baseline là trạng thái KHÔNG XÁC MINH ĐƯỢC —
+    /// trả lỗi thay vì Ok(true) (trước đây vault có thể bị thay thế toàn phần
+    /// trước khi lock_baseline mà mọi kiểm tra vẫn "pass").
     pub fn verify_integrity(&self) -> Result<bool, VaultShieldError> {
         let expected = match &self.expected_commitment {
             Some(exp) => exp,
-            None => return Ok(true), // Chưa khóa baseline
+            None => return Err(VaultShieldError::NoBaseline),
         };
 
         let current = self.compute_file_commitment()?;

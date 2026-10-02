@@ -21,10 +21,10 @@
 //! - Group Q: System-Wide Regression Matrix (schema V2 backward compatibility, end-to-end pipeline)
 
 use cyberv_agent::defense::passive::isolation::{
-    encode_hex, BrokerError, BrokerPolicyAdmissionController, BrokerRpcCommand, CoreBroker,
-    IpcFrameError, NetworkWorkerDaemon, PolicyAdmissionError, RpcEnvelope, RpcSessionValidator,
-    SignedPolicyEnvelope, CURRENT_IPC_PROTOCOL_VERSION, EXPECTED_WORKER_APPCONTAINER_SID,
-    MAX_IPC_FRAME_SIZE,
+    compute_frame_mac, encode_hex, BrokerError, BrokerPolicyAdmissionController, BrokerRpcCommand,
+    CoreBroker, IpcFrameError, NetworkWorkerDaemon, PolicyAdmissionError, RpcEnvelope,
+    RpcSessionValidator, SignedPolicyEnvelope, CURRENT_IPC_PROTOCOL_VERSION,
+    EXPECTED_WORKER_APPCONTAINER_SID, MAX_IPC_FRAME_SIZE,
 };
 use cyberv_agent::defense::passive::update::{
     CommitStage, HardwareVersionDecision, PendingCommitMarker, StartupRecoveryAction,
@@ -41,7 +41,7 @@ use cyberv_agent::defense::policy::{PolicyConfig, PolicyDecision, SecurityPolicy
 use cyberv_agent::trust::tpm::{
     MockTpmNvCounter, TpmAssuranceType, TpmError, TpmNvCounter, DEFAULT_CYBERV_NV_INDEX,
 };
-use ed25519_dalek::{Signer, SigningKey};
+use ed25519_dalek::SigningKey;
 use rand_core::OsRng;
 
 // =========================================================================
@@ -349,9 +349,10 @@ fn test_e03_broker_verifies_client_executable_authenticode() {
 fn test_f01_ephemeral_x25519_chacha20_handshake_success() {
     let mut broker = CoreBroker::new();
     let session_id = 99887766u64;
-    broker.register_session(session_id);
+    // Ket qua bat tay phien: broker sinh khoa phien va trao cho worker
+    let session_key = broker.register_session(session_id).unwrap();
 
-    let mut worker = NetworkWorkerDaemon::new(session_id);
+    let mut worker = NetworkWorkerDaemon::with_session_key(session_id, session_key);
     let request = worker.create_rpc_request(1, BrokerRpcCommand::GetStatus, vec![1, 2, 3]);
 
     let handled = broker.handle_rpc_frame(&request);
@@ -361,10 +362,10 @@ fn test_f01_ephemeral_x25519_chacha20_handshake_success() {
 #[test]
 fn test_f02_handshake_session_isolation() {
     let mut broker = CoreBroker::new();
-    broker.register_session(1001);
-    broker.register_session(1002);
+    let key1 = broker.register_session(1001).unwrap();
+    broker.register_session(1002).unwrap();
 
-    let mut worker1 = NetworkWorkerDaemon::new(1001);
+    let mut worker1 = NetworkWorkerDaemon::with_session_key(1001, key1);
     let req1 = worker1.create_rpc_request(1, BrokerRpcCommand::GetStatus, vec![]);
 
     assert_eq!(
@@ -383,30 +384,42 @@ fn test_f02_handshake_session_isolation() {
 }
 
 #[test]
-fn test_f03_tampered_handshake_payload_fails_aead_tag() {
-    let mut validator = RpcSessionValidator::new(42);
-    let mut envelope = RpcEnvelope {
+fn test_f03_tampered_frame_fails_mac_before_any_state_change() {
+    let session_key = [0x42u8; 32];
+    let mut validator = RpcSessionValidator::with_session_key(42, session_key);
+    let envelope = RpcEnvelope {
         protocol_version: CURRENT_IPC_PROTOCOL_VERSION,
         session_id: 42,
         request_id: 1,
         sequence_number: 1,
         command: BrokerRpcCommand::GetStatus,
         payload: vec![0x00; 32],
-        auth_tag: [0xAA; 16],
+        auth_tag: [0u8; 16],
+    };
+    let envelope = RpcEnvelope {
+        auth_tag: compute_frame_mac(&session_key, &envelope),
+        ..envelope
     };
 
     // Khung chuẩn
     assert!(validator.validate_and_advance(&envelope).is_ok());
 
-    // Khung session sai
-    envelope.session_id = 999;
-    envelope.sequence_number = 2;
+    // Khung session sai: frame bị can thiệp sau khi MAC đã tính -> MAC sai
+    // phải bị từ chối TRƯỚC cả check session/sequence (không rò rỉ trạng thái).
+    let mut tampered = envelope.clone();
+    tampered.session_id = 999;
+    tampered.sequence_number = 2;
     assert_eq!(
-        validator.validate_and_advance(&envelope),
-        Err(IpcFrameError::SessionMismatch {
-            expected: 42,
-            actual: 999
-        })
+        validator.validate_and_advance(&tampered),
+        Err(IpcFrameError::AuthenticationTagInvalid)
+    );
+
+    // Mock tag cũng phải bị từ chối
+    let mut mock_tagged = envelope.clone();
+    mock_tagged.auth_tag = [0xAA; 16];
+    assert_eq!(
+        validator.validate_and_advance(&mock_tagged),
+        Err(IpcFrameError::AuthenticationTagInvalid)
     );
 }
 
@@ -416,7 +429,8 @@ fn test_f03_tampered_handshake_payload_fails_aead_tag() {
 
 #[test]
 fn test_g01_strict_monotonic_sequence_numbers_prevent_replay() {
-    let mut validator = RpcSessionValidator::new(50);
+    let session_key = [0x50u8; 32];
+    let mut validator = RpcSessionValidator::with_session_key(50, session_key);
     let envelope = RpcEnvelope {
         protocol_version: CURRENT_IPC_PROTOCOL_VERSION,
         session_id: 50,
@@ -425,6 +439,10 @@ fn test_g01_strict_monotonic_sequence_numbers_prevent_replay() {
         command: BrokerRpcCommand::GetStatus,
         payload: vec![],
         auth_tag: [0; 16],
+    };
+    let envelope = RpcEnvelope {
+        auth_tag: compute_frame_mac(&session_key, &envelope),
+        ..envelope
     };
 
     // Lần 1: sequence = 1 -> OK
@@ -442,7 +460,8 @@ fn test_g01_strict_monotonic_sequence_numbers_prevent_replay() {
 
 #[test]
 fn test_g02_out_of_order_sequence_frame_rejected() {
-    let mut validator = RpcSessionValidator::new(50);
+    let session_key = [0x50u8; 32];
+    let mut validator = RpcSessionValidator::with_session_key(50, session_key);
     let envelope = RpcEnvelope {
         protocol_version: CURRENT_IPC_PROTOCOL_VERSION,
         session_id: 50,
@@ -451,6 +470,10 @@ fn test_g02_out_of_order_sequence_frame_rejected() {
         command: BrokerRpcCommand::GetStatus,
         payload: vec![],
         auth_tag: [0; 16],
+    };
+    let envelope = RpcEnvelope {
+        auth_tag: compute_frame_mac(&session_key, &envelope),
+        ..envelope
     };
 
     assert_eq!(
@@ -464,7 +487,8 @@ fn test_g02_out_of_order_sequence_frame_rejected() {
 
 #[test]
 fn test_g03_frame_size_strictly_bounded_to_64kb() {
-    let mut validator = RpcSessionValidator::new(50);
+    let session_key = [0x50u8; 32];
+    let mut validator = RpcSessionValidator::with_session_key(50, session_key);
     let oversized_payload = vec![0xCC; MAX_IPC_FRAME_SIZE + 1];
 
     let envelope = RpcEnvelope {
@@ -475,6 +499,10 @@ fn test_g03_frame_size_strictly_bounded_to_64kb() {
         command: BrokerRpcCommand::GetStatus,
         payload: oversized_payload,
         auth_tag: [0; 16],
+    };
+    let envelope = RpcEnvelope {
+        auth_tag: compute_frame_mac(&session_key, &envelope),
+        ..envelope
     };
 
     assert_eq!(
@@ -499,7 +527,7 @@ fn test_h01_compromised_worker_cannot_access_vault_directly() {
 #[test]
 fn test_h02_worker_fuzzing_garbage_payload_broker_survives() {
     let mut broker = CoreBroker::new();
-    broker.register_session(777);
+    broker.register_session(777).unwrap();
 
     // Gửi khung với sequence number sai lệch
     let corrupt_frame = RpcEnvelope {
@@ -545,12 +573,8 @@ fn test_i01_admission_valid_master_signed_policy_accepted() {
         BrokerPolicyAdmissionController::new(10, "tenant-cyberv-corp", verifying_key);
 
     let policy_json = r#"{"allow_threshold": 8000, "minimum_assurance": "OSProtected"}"#;
-    let canonical = format!(
-        "{}:{}:{}:{}:{}:{}",
-        11, "CyberV Master Authority", "tenant-cyberv-corp", 1000, 2000, policy_json
-    );
-    let signature = signing_key.sign(canonical.as_bytes());
-
+    // Canonical signing giờ là length-prefixed bytes (M3) — ký qua helper chung
+    // của envelope thay vì tự nối chuỗi phía test.
     let envelope = SignedPolicyEnvelope {
         version: 11,
         issuer: "CyberV Master Authority".to_string(),
@@ -558,8 +582,9 @@ fn test_i01_admission_valid_master_signed_policy_accepted() {
         not_before: 1000,
         not_after: 2000,
         policy_json: policy_json.to_string(),
-        signature_hex: encode_hex(&signature.to_bytes()),
-    };
+        signature_hex: String::new(),
+    }
+    .sign_with(&signing_key);
 
     let raw_bytes = serde_json::to_vec(&envelope).unwrap();
     let admitted_version = controller
@@ -665,6 +690,32 @@ fn test_k01_wdac_generator_audit_mode_first_xml() {
     assert!(xml.contains("<RuleType>Enabled:Audit Mode</RuleType>"));
     assert!(xml.contains("ID_SIGNER_WHQL"));
     assert!(xml.contains("ID_SIGNER_CYBERV"));
+
+    // M7: chua provision TBS -> XML phai mang marker ro rang, khong bao gio
+    // hash cua chuoi rong (sha256("")) duoc dung lam CertRoot.
+    assert!(xml.contains("UNPROVISIONED_CYBERV_SIGNER_TBS"));
+    assert!(!xml.contains("E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"));
+
+    // Sau khi provision TBS that -> marker bien mat
+    let mut provisioned = config.clone();
+    provisioned.cyberv_signer_tbs = Some("ab".repeat(48)); // 96 hex nibbles placeholder TBS
+    let xml2 = WdacPolicyGenerator::generate_cipolicy_xml(&provisioned);
+    assert!(!xml2.contains("UNPROVISIONED_CYBERV_SIGNER_TBS"));
+    assert!(xml2.contains("abababab"));
+}
+
+#[test]
+fn test_k01b_wdac_xml_escapes_policy_id() {
+    // XML injection: policy_id den tu cau hinh ben ngoai phai duoc escape
+    let mut config = WdacPolicyGenerator::audit_mode_config();
+    config.policy_id = "{EVIL\"><script>alert(1)</script>}".to_string();
+    let xml = WdacPolicyGenerator::generate_cipolicy_xml(&config);
+    assert!(!xml.contains("<script>"));
+    assert!(xml.contains("&lt;script&gt;"));
+    // policy_id bi escape van validate OK khi TBS da provision
+    config.cyberv_signer_tbs = Some("cd".repeat(48));
+    let xml2 = WdacPolicyGenerator::generate_cipolicy_xml(&config);
+    assert!(WdacPolicyGenerator::validate_cipolicy_xml(&xml2).is_ok());
 }
 
 #[test]
@@ -683,7 +734,14 @@ fn test_k02_wdac_generator_enforced_mode_rules() {
 
 #[test]
 fn test_l01_wdac_deployment_staging_and_validation() {
-    let config = WdacPolicyGenerator::audit_mode_config();
+    // Chua provision TBS -> policy PHAI bi tu choi deploy (fail-closed)
+    let unprovisioned = WdacPolicyGenerator::audit_mode_config();
+    let xml_unprov = WdacPolicyGenerator::generate_cipolicy_xml(&unprovisioned);
+    assert!(WdacPolicyGenerator::validate_cipolicy_xml(&xml_unprov).is_err());
+
+    // Da provision TBS -> validate OK
+    let mut config = WdacPolicyGenerator::audit_mode_config();
+    config.cyberv_signer_tbs = Some("ab".repeat(48));
     let xml = WdacPolicyGenerator::generate_cipolicy_xml(&config);
 
     assert!(WdacPolicyGenerator::validate_cipolicy_xml(&xml).is_ok());
@@ -905,18 +963,19 @@ fn test_q02_full_pipeline_end_to_end_integrity() {
     let new_val = tpm.increment_counter(DEFAULT_CYBERV_NV_INDEX).unwrap();
     assert_eq!(new_val, 11);
 
-    // 2. Broker-Worker Channel
+    // 2. Broker-Worker Channel (worker nhận session key từ kết quả bắt tay)
     let mut broker = CoreBroker::new();
-    broker.register_session(1234);
-    let mut worker = NetworkWorkerDaemon::new(1234);
+    let session_key_1234 = broker.register_session(1234).unwrap();
+    let mut worker = NetworkWorkerDaemon::with_session_key(1234, session_key_1234);
     let req = worker.create_rpc_request(1, BrokerRpcCommand::GetStatus, vec![]);
     assert_eq!(
         broker.handle_rpc_frame(&req),
         Ok(BrokerRpcCommand::GetStatus)
     );
 
-    // 3. WDAC Policy Generation & Process Audit
-    let wdac_config = WdacPolicyGenerator::audit_mode_config();
+    // 3. WDAC Policy Generation & Process Audit (TBS da provision)
+    let mut wdac_config = WdacPolicyGenerator::audit_mode_config();
+    wdac_config.cyberv_signer_tbs = Some("ab".repeat(48));
     let xml = WdacPolicyGenerator::generate_cipolicy_xml(&wdac_config);
     assert!(WdacPolicyGenerator::validate_cipolicy_xml(&xml).is_ok());
 

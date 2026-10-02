@@ -23,31 +23,60 @@ pub struct HttpDeviceTransport {
 }
 
 impl HttpDeviceTransport {
-    pub fn new(base_url: impl Into<String>, anon_key: impl Into<String>) -> Self {
+    pub fn new(base_url: impl Into<String>, anon_key: impl Into<String>) -> Result<Self, TransportError> {
+        // INV-009: JWT, apikey, chữ ký proof và đồ thị bằng chứng là dữ liệu nhạy cảm —
+        // bắt buộc HTTPS, chỉ nới lỏng cho localhost/loopback phục vụ kiểm thử cục bộ.
+        let base_url = base_url.into().trim_end_matches('/').to_string();
+        Self::validate_base_url(&base_url)?;
+
         let client = Client::builder()
             .timeout(Duration::from_secs(10))
             .pool_idle_timeout(Duration::from_secs(90))
             .build()
-            .unwrap_or_default();
+            .map_err(|e| TransportError::Serialization(format!("HTTP client build failed: {}", e)))?;
 
-        Self {
+        Ok(Self {
             client,
-            base_url: base_url.into().trim_end_matches('/').to_string(),
+            base_url,
             anon_key: anon_key.into(),
             max_retries: 3,
-        }
+        })
     }
 
     pub fn with_client(
         client: Client,
         base_url: impl Into<String>,
         anon_key: impl Into<String>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, TransportError> {
+        let base_url = base_url.into().trim_end_matches('/').to_string();
+        Self::validate_base_url(&base_url)?;
+        Ok(Self {
             client,
-            base_url: base_url.into().trim_end_matches('/').to_string(),
+            base_url,
             anon_key: anon_key.into(),
             max_retries: 3,
+        })
+    }
+
+    /// Từ chối base URL không phải HTTPS (trừ loopback cho test cục bộ).
+    /// Chặn lớp MITM downgrade http:// đánh cắp JWT/chữ ký/đồ thị phần cứng.
+    fn validate_base_url(base_url: &str) -> Result<(), TransportError> {
+        let lower = base_url.to_ascii_lowercase();
+        let is_local = {
+            let host = lower
+                .strip_prefix("http://")
+                .or_else(|| lower.strip_prefix("https://"))
+                .unwrap_or(&lower);
+            host.starts_with("localhost")
+                || host.starts_with("127.0.0.1")
+                || host.starts_with("[::1]")
+        };
+        if lower.starts_with("https://") || (is_local && lower.starts_with("http://")) {
+            Ok(())
+        } else {
+            Err(TransportError::Serialization(
+                "Refusing to use insecure transport: base_url must use HTTPS (localhost exempt for local testing)".to_string(),
+            ))
         }
     }
 
