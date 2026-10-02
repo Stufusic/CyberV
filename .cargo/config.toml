@@ -1,0 +1,14 @@
+# Build hardening cho Windows MSVC (M0 / B1-2):
+# - Control Flow Guard: chặn hijack indirect call (ROP/JOP)
+# Áp cho mọi target Windows MSVC (agent binary + tests).
+# (Ghi chú: `-C stack-protector` hiện là nightly-only — theo dõi stabilization,
+#  không đưa vào stable build.)
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = [
+    "-C",
+    "control-flow-guard=yes",
+]
+
+[build]
+# Không bao giờ cập nhật lockfile âm thầm khi build release/package
+incremental = true

@@ -3,3 +3,10 @@ members = [
     "agent",
 ]
 resolver = "2"
+
+# Build hardening (M0 / B1):
+# - strip symbols khỏi binary shipped (PDB debug vẫn sinh riêng cho MSVC)
+# KHÔNG bật panic = "abort": INV-006 (EventBus mutex-poison self-healing)
+# phụ thuộc unwinding qua catch_unwind, và cargo test --release cũng vậy.
+[profile.release]
+strip = "symbols"

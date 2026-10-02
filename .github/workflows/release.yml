@@ -1,0 +1,104 @@
+name: Release
+# Skeleton release pipeline (M0 — chưa bật ký số, xem Docs/PIPELINE_SECURITY_PLAN.md A.3)
+#
+# Luồng: tag v* → build --locked → SBOM → SHA512SUMS → attestation → draft release
+#        → publish qua environment "release-approval" (cấu hình ≥ 2 approver trên GitHub).
+#
+# Ký số (M1 — ĐÃ CHỐT: EV cert + HSM): sign-release.ps1 chạy trên signing
+# machine có HSM token (không đưa private key vào GitHub Secrets). CI chỉ
+# build + attestation; artifact ký offline trước khi publish.
+# Driver attestation signing: Docs/DRIVER_SIGNING_RUNBOOK.md (dùng cùng EV cert).
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build-release:
+    name: Build Release Artifacts
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain (pinned qua rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      # Build --locked: tuyệt đối không nhận dependency khác lockfile.
+      # cargo-auditable nhúng danh sách dependency vào binary cho SBOM.
+      - name: Build agent (release, locked, auditable)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-auditable
+      - run: cargo auditable build --release --locked -p cyberv-agent
+
+      # TODO(M1): signing user-mode binaries ở đây khi D.1 được chốt
+      # - run: scripts\sign-release.ps1 -Binary target\release\cyberv-agent.exe
+
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release/staging | Out-Null
+          Copy-Item target/release/cyberv-agent.exe release/staging/
+          if (Test-Path release/bin) { Copy-Item release/bin/* release/staging/ -ErrorAction SilentlyContinue }
+          # SHA512SUMS: manifest toàn vẹn cho người dùng xác minh độc lập
+          $files = Get-ChildItem release/staging -File
+          $hashes = $files | ForEach-Object {
+              $h = (Get-FileHash $_.FullName -Algorithm SHA512).Hash.ToLower()
+              "$h  $($_.Name)"
+          }
+          $hashes | Set-Content release/staging/SHA512SUMS -Encoding utf8
+          Get-Content release/staging/SHA512SUMS
+
+      # TODO(M1): sinh + ký update manifest Ed25519 (UpdatePackageManifest)
+      # - run: scripts\generate-update-manifest.ps1 -Version $env:GITHUB_REF_NAME
+
+      - name: Generate SBOM (dependency inventory)
+        shell: pwsh
+        run: |
+          # cargo-auditable đã nhúng danh sách dependency vào binary;
+          # extract ra tệp SBOM văn bản kèm release
+          cargo tree --workspace --all-features > release/staging/DEPENDENCY_TREE.txt
+          cargo metadata --format-version 1 > release/staging/CARGO_METADATA.json
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: |
+            release/staging/cyberv-agent.exe
+            release/staging/SHA512SUMS
+
+      - name: Upload release bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-bundle
+          path: release/staging/
+
+  publish:
+    name: Publish Draft Release
+    needs: build-release
+    runs-on: ubuntu-latest
+    # Yêu cầu environment "release-approval" với ≥ 2 approver trên GitHub repo settings
+    environment: release-approval
+    permissions:
+      contents: write
+    steps:
+      - name: Download release bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: release-bundle
+          path: bundle
+
+      - name: Create draft GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" --draft --title "CyberV $TAG" --generate-notes bundle/*
+          echo "Draft release created. Publish sau khi QA sign-off."

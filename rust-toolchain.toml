@@ -1,0 +1,6 @@
+# Pin toolchain cho mọi môi trường (dev/CI/release) — tiền đề của reproducible build.
+# Bất kỳ bump phiên bản nào phải là PR riêng và chạy full test suite.
+[toolchain]
+channel = "1.98.1"
+profile = "minimal"
+components = ["clippy", "rustfmt"]

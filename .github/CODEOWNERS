@@ -1,0 +1,19 @@
+# CyberV Code Owners
+# Cấu hình review gate: các thư mục ảnh hưởng trực tiếp tới biên giới
+# an ninh (Ring-0, ABI contract, kênh cập nhật) bắt buộc review riêng.
+
+# Kernel driver toàn bộ (C code, INF, ABI header)
+/driver/ @Stufusic
+
+# Rust↔kernel ABI client + cross-validation
+/agent/src/kernel/ @Stufusic
+
+# Kênh cập nhật phần mềm (package staging gate, manifest, version policy)
+/agent/src/defense/passive/update/ @Stufusic
+
+# Identity & DPAPI vault (khóa định danh thiết bị)
+/agent/src/identity/ @Stufusic
+
+# Quy tắc an ninh CI (workflow, deny.toml)
+/.github/workflows/ @Stufusic
+/deny.toml @Stufusic

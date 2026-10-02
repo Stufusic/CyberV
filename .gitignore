@@ -41,7 +41,13 @@ __pycache__/
 .pytest_cache/
 
 # Excluded Internal Documentation & Release artifacts
-Docs/
+# (Docs/* thay vi Docs/ de negation ben duoi co tac dung - git khong re-include
+#  file neu thu muc cha bi loai toan phan)
+Docs/*
+!Docs/THREAT_MODEL.md
+!Docs/PIPELINE_SECURITY_PLAN.md
+!Docs/PHASE1_2_IMPLEMENTATION_PLAN.md
+!Docs/DRIVER_SIGNING_RUNBOOK.md
 release/
 
 

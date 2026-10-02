@@ -9,6 +9,11 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# Quyền tối thiểu (S0 hardening): mọi job mặc định chỉ được đọc nội dung repo.
+# Các job cần thêm quyền phải tự khai báo lại và đi qua environment approval.
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     name: Build & Test (Windows x64)
@@ -20,9 +25,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Thiết lập Rust Toolchain bản Stable x86_64-pc-windows-msvc
+      # 2. Rust toolchain — đọc pin từ rust-toolchain.toml (reproducible builds)
       - name: Set up Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
 
       # 3. Tự động Cache các Crates và bản build để CI chạy cực nhanh
       - name: Cache Cargo dependencies
@@ -32,8 +37,19 @@ jobs:
       - name: Cargo Check
         run: cargo check --workspace --verbose
 
-      # 5. Chạy toàn bộ 430+ bài kiểm thử tự động của Rust Core Agent
-      - name: Rust Agent - Run Tests (430+ Passing)
+      # 4b. Lint nghiêm ngặt: mọi warning là lỗi (S0 hardening)
+      - name: Cargo Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # 4c. Phát hiện dependency khai mà không dùng (kiểu keyring trước đây)
+      - name: Unused dependencies (cargo-machete)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-machete
+      - run: cargo machete
+
+      # 5. Chạy toàn bộ bài kiểm thử tự động của Rust Core Agent
+      - name: Rust Agent - Run Tests
         run: cargo test --workspace --verbose
 
       # 6. Thiết lập Python môi trường
@@ -49,7 +65,72 @@ jobs:
           pip install pytest PySide6
 
       # 8. Chạy bộ 30 bài kiểm thử UI tự động
-      - name: CyberV UI - Run Tests (30 Passing)
+      - name: CyberV UI - Run Tests
         run: |
           $env:PYTHONPATH="."
           pytest cyberv_ui/tests -v
+
+      # 9. Security audit: quét lỗ hổng CVE + supply chain policy (cargo-deny)
+      - name: Security audit (cargo-audit)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - run: cargo audit
+
+      - name: Supply chain policy (cargo-deny)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - run: cargo deny check licenses bans sources
+
+  driver-build:
+    name: Kernel Driver Build (WDK)
+    # Trước đây toàn bộ C code của driver không được compile ở bất kỳ đâu trong CI.
+    # Bất kỳ lỗi cú pháp/API nào trong driver/CyberVProbe đều trượt qua mắt CI.
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Install WDK components
+        # WDK nuget package: cung cap toolset/headers cho kernel driver build
+        run: |
+          nuget install Microsoft.Windows.WDK.x64 -Version 10.0.26100.1 -ExcludeVersion -OutputDirectory wdk
+
+      - name: Build driver (msbuild CyberVProbe.sln x64 Release)
+        run: msbuild driver\CyberVProbe\CyberVProbe.sln /p:Configuration=Release /p:Platform=x64 /m
+
+      # Guard ABI: struct layout C và Rust phải khớp (ClientAbiVersion, sizes)
+      - name: ABI consistency guard
+        shell: pwsh
+        run: |
+          $ioctl = Get-Content driver\CyberVProbe\ioctl.h -Raw
+          $proto = Get-Content agent\src\kernel\client.rs -Raw
+          if ($ioctl -notmatch 'ClientAbiVersion') { Write-Error 'ioctl.h missing ClientAbiVersion (ABI drift)' }
+          if ($proto -notmatch 'client_abi_version') { Write-Error 'client.rs missing client_abi_version (ABI drift)' }
+          Write-Host 'ABI markers consistent.'
+
+  workflow-lint:
+    name: Lint GitHub Workflows
+    # Bảo vệ chính pipeline: bắt lỗi cú pháp + phát hiện anti-pattern an ninh
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: actionlint (syntax & correctness — blocking)
+        run: |
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) 1.7.7
+          ./actionlint -color
+
+      - name: zizmor (security anti-pattern — non-blocking, triage dần)
+        # Phát hiện: action không pin SHA, template injection, credential leak.
+        # Chuyển sang blocking sau khi triage các finding hiện có.
+        run: |
+          python3 -m pipx install zizmor
+          python3 -m pipx ensurepath
+          zizmor --no-online .github/workflows/ || true

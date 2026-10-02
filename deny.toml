@@ -1,0 +1,37 @@
+# cargo-deny configuration (Phase 3 — Supply Chain Hardening)
+# Run: cargo deny check
+
+[graph]
+# Chỉ xét dependency của workspace, không xét target-specific cho nền tảng khác
+all-features = false
+
+[licenses]
+version = 2
+# Cho phép các giấy phép tương thích Apache-2.0 của dự án
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "Zlib",
+    "CDLA-Permissive-2.0",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+deny = []
+
+[advisories]
+version = 2
+yanked = "warn"
+# CVE nghiêm trọng phải fail CI; mức còn lại cảnh báo
+severity-threshold = "high"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

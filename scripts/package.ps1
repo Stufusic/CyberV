@@ -23,7 +23,7 @@ New-Item -ItemType Directory -Path $WebDir | Out-Null
 # 2. Biên dịch CyberV Core Agent ở chế độ Release
 Write-Host "`n[1/2] Đang biên dịch CyberV Core Agent (Release)..." -ForegroundColor Yellow
 Set-Location (Join-Path $RootDir "agent")
-& "$env:USERPROFILE\.cargo\bin\cargo.exe" build --release --bin cyberv-agent
+& "$env:USERPROFILE\.cargo\bin\cargo.exe" build --release --locked --bin cyberv-agent
 
 $AgentExe = Join-Path $RootDir "target\release\cyberv-agent.exe"
 if (Test-Path $AgentExe) {
