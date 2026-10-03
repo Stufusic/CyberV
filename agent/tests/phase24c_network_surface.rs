@@ -15,27 +15,32 @@ use cyberv_agent::defense::passive::network_surface::NetworkSurfaceInspector;
 
 #[test]
 fn test_01_no_inbound_listening_ports_optimal() {
-    let empty_listeners = vec![];
-    let report = NetworkSurfaceInspector::audit_network_surface(empty_listeners);
+    // P1-3: audit đo THẬT qua GetExtendedTcpTable (PID hiện tại)
+    let report = NetworkSurfaceInspector::audit_network_surface();
     assert!(!report.has_inbound_listener);
     assert_eq!(report.network_surface_score, 10000);
+    assert!(report.summary.contains("queried"), "{}", report.summary);
 }
 
 #[test]
-fn test_02_inbound_listener_detected_penalizes_score() {
-    // Rogue open port 8080 detected on Agent PID
-    let listening_ports = vec![8080];
-    let report = NetworkSurfaceInspector::audit_network_surface(listening_ports);
-    assert!(report.has_inbound_listener);
+fn test_02_inbound_listener_semantics() {
+    // P1-3: tự mở 1 listener thật trên loopback rồi audit PHẢI phát hiện
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().unwrap().port();
+
+    let report = NetworkSurfaceInspector::audit_network_surface();
+    assert!(report.has_inbound_listener, "listener trên port {} phải được phát hiện", port);
+    assert!(report.inbound_ports.contains(&port));
     assert_eq!(report.network_surface_score, 2000);
+    // Drop listener -> các test khác không bị ảnh hưởng
+    drop(listener);
 }
 
 #[test]
 fn test_03_outbound_payload_size_limit_enforced() {
-    let empty_listeners = vec![];
-    let report = NetworkSurfaceInspector::audit_network_surface(empty_listeners);
-    assert!(report.is_outbound_constrained);
+    let report = NetworkSurfaceInspector::audit_network_surface();
     assert_eq!(report.max_payload_bytes, 1048576); // 1 MB
+    assert_eq!(report.timeout_seconds, 10);
 }
 
 #[test]

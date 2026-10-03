@@ -8,6 +8,13 @@
 //! - Group D: Freshness, Lifecycle & EDR Coexistence (Tests 25 - 31)
 //! - Group E: Separation of Observation and Response & Event Bus (Tests 32 - 37)
 
+/// P1-3: đường dẫn file TỒN TẠI thật cho fixture (audit DACL thật cần file có thật)
+fn existing_file_for_acl_audit() -> String {
+    std::env::current_exe()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "C:\\Windows\\System32\\kernel32.dll".to_string())
+}
+
 use cyberv_agent::defense::passive::debug::{
     DebugSignalConfidence, DebugStateAssessment, DebugStateAuditor,
 };
@@ -535,7 +542,7 @@ fn test_36_passive_defense_report_v2_json_roundtrip() {
     ) = (
         cyberv_agent::defense::ProcessMitigationManager::apply_and_verify(&Default::default()),
         cyberv_agent::defense::PrivilegeManager::inspect_and_drop_dangerous_privileges(),
-        cyberv_agent::defense::NetworkSurfaceInspector::audit_network_surface(vec![]),
+        cyberv_agent::defense::NetworkSurfaceInspector::audit_network_surface(),
         cyberv_agent::defense::BinaryIntegrityChecker::evaluate(
             true, "h", "h", true, true, true, true, true,
         ),
@@ -547,10 +554,9 @@ fn test_36_passive_defense_report_v2_json_roundtrip() {
             true,
         ),
         cyberv_agent::defense::IpcSecurityReport::standard_hardened(r"\\.\pipe\CyberV_IPC"),
-        cyberv_agent::defense::FilesystemAclManager::audit_critical_assets(
-            &["C:\\vault.dat"],
-            None,
-        ),
+        cyberv_agent::defense::FilesystemAclManager::audit_critical_assets(&[
+            existing_file_for_acl_audit().as_str(),
+        ]),
         cyberv_agent::defense::UpdateIntegrityReport::verified_active(),
         cyberv_agent::defense::PlatformIntegrityChecker::evaluate(true, true, true, "p0", "p7"),
         cyberv_agent::defense::CapabilityProfiler::probe_system_capabilities(),
@@ -587,7 +593,7 @@ fn test_37_legacy_json_deserialization_backward_compatibility() {
     ) = (
         cyberv_agent::defense::ProcessMitigationManager::apply_and_verify(&Default::default()),
         cyberv_agent::defense::PrivilegeManager::inspect_and_drop_dangerous_privileges(),
-        cyberv_agent::defense::NetworkSurfaceInspector::audit_network_surface(vec![]),
+        cyberv_agent::defense::NetworkSurfaceInspector::audit_network_surface(),
         cyberv_agent::defense::BinaryIntegrityChecker::evaluate(
             true, "h", "h", true, true, true, true, true,
         ),
@@ -599,10 +605,9 @@ fn test_37_legacy_json_deserialization_backward_compatibility() {
             true,
         ),
         cyberv_agent::defense::IpcSecurityReport::standard_hardened(r"\\.\pipe\CyberV_IPC"),
-        cyberv_agent::defense::FilesystemAclManager::audit_critical_assets(
-            &["C:\\vault.dat"],
-            None,
-        ),
+        cyberv_agent::defense::FilesystemAclManager::audit_critical_assets(&[
+            existing_file_for_acl_audit().as_str(),
+        ]),
         cyberv_agent::defense::UpdateIntegrityReport::verified_active(),
         cyberv_agent::defense::PlatformIntegrityChecker::evaluate(true, true, true, "p0", "p7"),
         cyberv_agent::defense::CapabilityProfiler::probe_system_capabilities(),

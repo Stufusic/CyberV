@@ -18,8 +18,31 @@ use cyberv_agent::security::assurance::AssuranceLevel;
 fn test_01_capability_matrix_all_probed() {
     let report = CapabilityProfiler::probe_system_capabilities();
     assert!(!report.profiles.is_empty());
-    assert!(report.composite_score >= 8000);
     assert!(report.summary.contains("Capability Profiler"));
+
+    // P1-3: bất biến bậc thang năng lực — verified ⇒ enabled ⇒ supported.
+    // Composite tự-consistent với số profile verified (không assert giá trị
+    // tuyệt đối vì phụ thuộc cấu hình thật của máy).
+    for p in &report.profiles {
+        assert!(
+            !(p.verified && !p.enabled) && !(p.enabled && !p.supported),
+            "{:?}: verified ⇒ enabled ⇒ supported bị vi phạm: {:?}",
+            p.capability,
+            p
+        );
+    }
+    let verified = report.profiles.iter().filter(|p| p.verified).count();
+    let expected = (verified as u64 * 10000 / report.profiles.len() as u64) as u32;
+    assert_eq!(report.composite_score, expected);
+
+    // CET: trên x86_64, CPUID probe phải chạy (supported=true nếu CPU có CET,
+    // không bao giờ thiếu reason)
+    for p in &report.profiles {
+        if p.capability == MitigationCapability::UserShadowStackCet && cfg!(target_arch = "x86_64")
+        {
+            assert!(p.reason.is_some(), "CET profile phải có reason trung thực");
+        }
+    }
 }
 
 #[test]

@@ -44,6 +44,13 @@ use cyberv_agent::trust::tpm::{
 use ed25519_dalek::SigningKey;
 use rand_core::OsRng;
 
+/// P1-3: đường dẫn file TỒN TẠI thật cho fixture (audit DACL thật cần file có thật)
+fn existing_file_for_acl_audit() -> String {
+    std::env::current_exe()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "C:\\Windows\\System32\\kernel32.dll".to_string())
+}
+
 // =========================================================================
 // GROUP A: TPM Semantics (Section 13 - Group A)
 // =========================================================================
@@ -998,7 +1005,7 @@ fn create_clean_passive_report() -> PassiveDefenseReport {
         cyberv_agent::defense::passive::process_mitigations::ProcessMitigationConfig::default();
     let mitigation = cyberv_agent::defense::passive::process_mitigations::ProcessMitigationManager::apply_and_verify(&mit_cfg);
     let privilege = cyberv_agent::defense::passive::privilege::PrivilegeManager::inspect_and_drop_dangerous_privileges();
-    let network = cyberv_agent::defense::passive::network_surface::NetworkSurfaceInspector::audit_network_surface(vec![]);
+    let network = cyberv_agent::defense::passive::network_surface::NetworkSurfaceInspector::audit_network_surface();
     let binary = cyberv_agent::defense::passive::binary_integrity::BinaryIntegrityChecker::evaluate(
         true, "h", "h", true, true, true, true, true,
     );
@@ -1014,8 +1021,7 @@ fn create_clean_passive_report() -> PassiveDefenseReport {
     );
     let filesystem =
         cyberv_agent::defense::passive::filesystem_acl::FilesystemAclManager::audit_critical_assets(
-            &["C:\\vault.dat"],
-            None,
+            &[&existing_file_for_acl_audit()],
         );
     let update = cyberv_agent::defense::passive::update::UpdateIntegrityReport::verified_active();
     let platform =

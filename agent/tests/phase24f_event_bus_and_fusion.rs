@@ -54,7 +54,7 @@ fn create_standard_mock_subsystem_reports() -> (
     let mit_cfg = ProcessMitigationConfig::default();
     let mitigation = ProcessMitigationManager::apply_and_verify(&mit_cfg);
     let privilege = PrivilegeManager::inspect_and_drop_dangerous_privileges();
-    let network = NetworkSurfaceInspector::audit_network_surface(vec![]);
+    let network = NetworkSurfaceInspector::audit_network_surface();
     let binary = BinaryIntegrityChecker::evaluate(
         true,
         "valid_hash",
@@ -73,11 +73,9 @@ fn create_standard_mock_subsystem_reports() -> (
         true,
     );
     let ipc = IpcSecurityReport::standard_hardened(r"\\.\pipe\CyberV_IPC");
-    let critical_paths = [
-        "C:\\ProgramData\\CyberV\\identity.vault",
-        "C:\\ProgramData\\CyberV\\config.json",
-    ];
-    let filesystem = FilesystemAclManager::audit_critical_assets(&critical_paths, None);
+    // P1-3: audit DACL thật cần file tồn tại — dùng file test binary hiện hành
+    let critical_path = existing_file_for_acl_audit();
+    let filesystem = FilesystemAclManager::audit_critical_assets(&[critical_path.as_str()]);
     let update = UpdateIntegrityReport::verified_active();
     let platform = PlatformIntegrityChecker::evaluate(
         true,
@@ -92,6 +90,13 @@ fn create_standard_mock_subsystem_reports() -> (
         mitigation, privilege, network, binary, driver, ipc, filesystem, update, platform,
         capability,
     )
+}
+
+/// P1-3: đường dẫn file TỒN TẠI thật cho fixture (audit DACL thật cần file có thật)
+fn existing_file_for_acl_audit() -> String {
+    std::env::current_exe()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "C:/Windows/System32/kernel32.dll".to_string())
 }
 
 #[test]

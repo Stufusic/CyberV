@@ -80,72 +80,94 @@ pub struct CapabilityMatrixReport {
 pub struct CapabilityProfiler;
 
 impl CapabilityProfiler {
-    /// Thăm dò môi trường thực tế của hệ điều hành và phần cứng
+    /// P1-3: thăm dò NĂNG LỰC THẬT từ các nguồn đã đo được:
+    /// - Process mitigations: GetProcessMitigationPolicy (thật qua process_mitigations)
+    /// - CET hardware: CPUID leaf 7 (ecx bit 7) — "supported" thật của CPU
+    /// - Các năng lượng chưa có probe thật (TPM/IOMMU/firmware) phải báo
+    ///   supported=false + lý do trung thực, KHÔNG verifiedActive.
     pub fn probe_system_capabilities() -> CapabilityMatrixReport {
-        #[cfg(target_arch = "x86_64")]
-        let cet_profile = SecurityCapabilityProfile {
-            capability: MitigationCapability::UserShadowStackCet,
-            supported: true,
-            enabled: true,
-            enforceable: true,
-            verified: true,
-            assurance: AssuranceLevel::HardwareBacked,
-            reason: Some("Hardware CET Shadow Stack available on platform".to_string()),
-        };
-        #[cfg(not(target_arch = "x86_64"))]
-        let cet_profile = SecurityCapabilityProfile::unsupported(
-            MitigationCapability::UserShadowStackCet,
-            "CPU does not support Intel/AMD hardware CET",
-        );
+        let mut profiles: Vec<SecurityCapabilityProfile> = Vec::new();
 
-        let profiles = vec![
-            // 1. DEP & ASLR: Luôn được hỗ trợ và bắt buộc trên Windows x64 hiện đại
-            SecurityCapabilityProfile::verified_active(
-                MitigationCapability::Dep,
-                AssuranceLevel::OSProtected,
-            ),
-            SecurityCapabilityProfile::verified_active(
-                MitigationCapability::Aslr,
-                AssuranceLevel::OSProtected,
-            ),
-            // 2. Dynamic Code (ACG): Hỗ trợ từ Windows 10 x64 trở lên
-            SecurityCapabilityProfile::verified_active(
+        // ---- 1. Mitigation thật của process (từ probe P1-3) ----
+        let mit = crate::defense::passive::process_mitigations::ProcessMitigationManager::apply_and_verify(
+            &Default::default(),
+        );
+        let measured = mit.is_verified;
+
+        // DEP/ASLR: tính chất nền tảng của Windows x64 hiện đại (không phải cờ đo được
+        // qua mitigation API) — verified khi chạy trên windows x64, else unsupported.
+        let dep_aslr_ok = cfg!(all(windows, target_arch = "x86_64"));
+        for cap in [MitigationCapability::Dep, MitigationCapability::Aslr] {
+            profiles.push(if dep_aslr_ok {
+                SecurityCapabilityProfile::verified_active(cap, AssuranceLevel::OSProtected)
+            } else {
+                SecurityCapabilityProfile::unsupported(cap, "Platform does not guarantee DEP/ASLR")
+            });
+        }
+
+        if measured {
+            profiles.push(profile_from(
                 MitigationCapability::DynamicCodePolicy,
-                AssuranceLevel::OSProtected,
-            ),
-            // 3. Image Load Policy: Hỗ trợ từ Windows 10
-            SecurityCapabilityProfile::verified_active(
+                mit.is_acg_active,
+                "GetProcessMitigationPolicy(DynamicCode)",
+                measured,
+            ));
+            profiles.push(profile_from(
                 MitigationCapability::ImageLoadPolicy,
-                AssuranceLevel::OSProtected,
-            ),
-            // 4. Extension Point Disable: Hỗ trợ rộng rãi trên Windows
-            SecurityCapabilityProfile::verified_active(
+                mit.is_image_load_restricted,
+                "GetProcessMitigationPolicy(ImageLoad)",
+                measured,
+            ));
+            profiles.push(profile_from(
                 MitigationCapability::ExtensionPointDisable,
-                AssuranceLevel::OSProtected,
-            ),
-            // 5. Strict Handle Check: Hỗ trợ mặc định trong userland
-            SecurityCapabilityProfile::verified_active(
+                mit.is_extension_point_disabled,
+                "GetProcessMitigationPolicy(ExtensionPointDisable)",
+                measured,
+            ));
+            profiles.push(profile_from(
                 MitigationCapability::StrictHandleCheck,
-                AssuranceLevel::OSProtected,
-            ),
-            // 6. CFG / XFG
-            SecurityCapabilityProfile::verified_active(
+                mit.is_strict_handle_active,
+                "GetProcessMitigationPolicy(StrictHandleCheck)",
+                measured,
+            ));
+            profiles.push(profile_from(
+                MitigationCapability::ChildProcessRestriction,
+                !mit.allow_child_helpers,
+                "GetProcessMitigationPolicy(ChildProcess)",
+                measured,
+            ));
+            // CFG: binary compiled với /guard:cf — query thật
+            #[cfg(windows)]
+            {
+                let cfg_flags =
+                    crate::defense::passive::process_mitigations::query_policy_flags(
+                        crate::defense::passive::process_mitigations::POLICY_CONTROL_FLOW_GUARD,
+                    );
+                profiles.push(profile_from(
+                    MitigationCapability::ControlFlowGuardCfg,
+                    cfg_flags.map(|f| f & 0x1 != 0).unwrap_or(false),
+                    "GetProcessMitigationPolicy(ControlFlowGuard)",
+                    cfg_flags.is_some(),
+                ));
+            }
+        } else {
+            for cap in [
+                MitigationCapability::DynamicCodePolicy,
+                MitigationCapability::ImageLoadPolicy,
+                MitigationCapability::ExtensionPointDisable,
+                MitigationCapability::StrictHandleCheck,
+                MitigationCapability::ChildProcessRestriction,
                 MitigationCapability::ControlFlowGuardCfg,
-                AssuranceLevel::OSProtected,
-            ),
-            // 7. CET / User Shadow Stack (Hardware-Enforced Stack Protection)
-            cet_profile,
-            // 8. Child Process Restriction: Luôn hỗ trợ nhưng cho phép secure override
-            SecurityCapabilityProfile {
-                capability: MitigationCapability::ChildProcessRestriction,
-                supported: true,
-                enabled: true,
-                enforceable: true,
-                verified: true,
-                assurance: AssuranceLevel::OSProtected,
-                reason: Some("Child process policy active with helper override".to_string()),
-            },
-        ];
+            ] {
+                profiles.push(SecurityCapabilityProfile::unsupported(
+                    cap,
+                    "Mitigation probe unavailable (fail-closed)",
+                ));
+            }
+        }
+
+        // ---- 2. CET shadow stack: hardware support qua CPUID ----
+        profiles.push(cet_profile());
 
         let verified_count = profiles.iter().filter(|p| p.verified).count();
         let total = profiles.len();
@@ -165,5 +187,72 @@ impl CapabilityProfiler {
             composite_score,
             summary,
         }
+    }
+}
+
+/// Xây profile 4-trạng-thái từ một giá trị enabled đã đo được.
+/// Bậc thang bất biến: verified ⇒ enabled ⇒ supported.
+fn profile_from(
+    cap: MitigationCapability,
+    enabled: bool,
+    source: &str,
+    measured: bool,
+) -> SecurityCapabilityProfile {
+    if enabled {
+        SecurityCapabilityProfile {
+            capability: cap,
+            supported: true,
+            enabled: true,
+            enforceable: true,
+            verified: measured,
+            assurance: if measured {
+                AssuranceLevel::OSProtected
+            } else {
+                AssuranceLevel::Software
+            },
+            reason: Some(source.to_string()),
+        }
+    } else {
+        SecurityCapabilityProfile::supported_not_enabled(
+            cap,
+            format!("{}: policy chưa bật trên process này", source),
+        )
+    }
+}
+
+/// CET shadow stack: hardware support thật qua CPUID (leaf 7, ECX bit 7).
+/// "enabled" (kernel policy) chưa có probe → false trung thực cho tới P2.
+fn cet_profile() -> SecurityCapabilityProfile {
+    #[cfg(target_arch = "x86_64")]
+    {
+        // SAFETY: cpuid an toàn trên mọi x86_64
+        let cpuid = std::arch::x86_64::__cpuid(7);
+        let cet_supported = cpuid.ecx & (1 << 7) != 0;
+        if cet_supported {
+            SecurityCapabilityProfile {
+                capability: MitigationCapability::UserShadowStackCet,
+                supported: true,
+                enabled: false,
+                enforceable: true,
+                verified: false,
+                assurance: AssuranceLevel::OSProtected,
+                reason: Some(
+                    "CPU supports CET shadow stack (CPUID.7.ECX[7]); kernel policy probe pending (P2)"
+                        .to_string(),
+                ),
+            }
+        } else {
+            SecurityCapabilityProfile::unsupported(
+                MitigationCapability::UserShadowStackCet,
+                "CPUID.7.ECX[7] = 0: CPU lacks CET shadow stack",
+            )
+        }
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        SecurityCapabilityProfile::unsupported(
+            MitigationCapability::UserShadowStackCet,
+            "Non-x86_64 platform",
+        )
     }
 }

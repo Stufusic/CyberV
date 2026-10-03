@@ -52,7 +52,9 @@ pub struct ProcessMitigationManager;
 
 // ProcessMitigationPolicy enum values (Windows SDK — ổn định)
 #[cfg(windows)]
-const POLICY_DYNAMIC_CODE: u32 = 2;
+pub const POLICY_DYNAMIC_CODE: u32 = 2;
+#[cfg(windows)]
+pub const POLICY_CONTROL_FLOW_GUARD: u32 = 7;
 #[cfg(windows)]
 const POLICY_STRICT_HANDLE_CHECK: u32 = 3;
 #[cfg(windows)]
@@ -108,6 +110,12 @@ pub struct QueriedFlags {
     pub strict_raise: bool,
     pub child_deny: bool,
     pub all_queried: bool,
+}
+
+/// Truy vấn thô flags của một policy (dùng chéo bởi capability profiler)
+#[cfg(windows)]
+pub fn query_policy_flags(policy: u32) -> Option<u32> {
+    query_policy_u32(policy)
 }
 
 #[cfg(windows)]
