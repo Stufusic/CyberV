@@ -3,6 +3,7 @@
 //! Device-Binding Security Protocol v0.1 Implementation
 
 pub mod daemon;
+pub mod daemon_runner;
 pub mod defense;
 pub mod evidence;
 pub mod fingerprint;
@@ -17,3 +18,4 @@ pub mod transparency;
 pub mod transport;
 pub mod trust;
 pub mod service;
+pub mod service_config;

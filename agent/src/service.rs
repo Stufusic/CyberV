@@ -355,31 +355,93 @@ mod win32_service {
         // nên ObCallbacks không bao giờ có mục tiêu để bảo vệ.
         attempt_kernel_shield_registration();
 
-        // Spawn Tokio runtime thread for IPC Named Pipe Server (Docs/rvnew.md)
-        std::thread::spawn(|| {
+        // P1-2: SharedAgentStatus — snapshot trạng thái daemon thật cho IPC GetStatus
+        let agent_status = crate::daemon_runner::new_shared_status();
+        let heartbeat_status = agent_status.clone();
+
+        // Spawn Tokio runtime thread: IPC Named Pipe Server + AgentDaemon thật
+        // (nếu có cấu hình). Không config = keep-alive only, trạng thái UNKNOWN
+        // fail-closed — tuyệt đối không chạy daemon với giá trị đoán.
+        std::thread::spawn(move || {
             if let Ok(rt) = tokio::runtime::Runtime::new() {
                 rt.block_on(async {
                     let server = crate::defense::passive::ipc::server::win_server::NamedPipeServer::new(
-                        crate::defense::passive::ipc::server::DEFAULT_PIPE_NAME
-                    );
-                    let _ = server.run_server().await;
+                        crate::defense::passive::ipc::server::DEFAULT_PIPE_NAME,
+                    )
+                    .with_status_snapshot(agent_status.clone());
+                    let ipc_task = tokio::spawn(async move {
+                        let _ = server.run_server().await;
+                    });
+
+                    match crate::service_config::AgentServiceConfig::load_from_default_path() {
+                        Ok(Some(config)) => {
+                            log_service_event(&format!(
+                                "Daemon: config loaded — starting real AgentDaemon loop (interval {}s).",
+                                config.attestation_interval_secs
+                            ));
+                            let shutdown_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                            // Bridge SHUTDOWN_FLAG (static) -> Arc flag của loop
+                            {
+                                let flag = shutdown_flag.clone();
+                                tokio::spawn(async move {
+                                    loop {
+                                        if SHUTDOWN_FLAG.load(Ordering::SeqCst) {
+                                            flag.store(true, Ordering::SeqCst);
+                                            break;
+                                        }
+                                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                                    }
+                                });
+                            }
+                            let run_result = crate::daemon_runner::run_configured_daemon(
+                                config,
+                                agent_status.clone(),
+                                shutdown_flag,
+                            )
+                            .await;
+                            match run_result {
+                                Ok(()) => log_service_event("Daemon loop ended cleanly (shutdown)."),
+                                Err(e) => log_service_event(&format!("Daemon loop stopped: {}", e)),
+                            }
+                        }
+                        Ok(None) => {
+                            log_service_event(
+                                "Daemon NOT WIRED: no agent_config.json found (fail-closed UNKNOWN status). Place config at %ProgramData%/CyberV/agent_config.json.",
+                            );
+                        }
+                        Err(e) => {
+                            log_service_event(&format!("Daemon NOT WIRED: config error: {}", e));
+                        }
+                    }
+
+                    let _ = ipc_task.await;
                 });
             }
         });
 
-        // Run background service keep-alive loop until stop is signaled
+        // Heartbeat — TRUNG THỰC: phản ánh trạng thái daemon thật từ snapshot
+        // (hoặc NOT WIRED khi chưa cấu hình), không bao giờ tuyên bố "intact".
         let mut tick_count = 0u64;
         while !SHUTDOWN_FLAG.load(Ordering::SeqCst) {
             std::thread::sleep(std::time::Duration::from_secs(5));
             tick_count += 1;
             if tick_count.is_multiple_of(12) {
-                // Heartbeat every 60s — TRUNG THỰC: vòng này chỉ giữ service
-                // và IPC pipe còn sống, CHƯA chạy AgentDaemon attestation.
-                // Ghi log "monitoring intact" khi không có monitoring là tín
-                // hiệu bảo vệ giả. Wire AgentDaemon vào đây ở Phase 1.
+                let status_line = match heartbeat_status.read() {
+                    Ok(guard) => match guard.as_ref() {
+                        Some(snap) => format!(
+                            "daemon state={} driver={} last_attested={}",
+                            snap.state,
+                            if snap.driver_available { "yes" } else { "no" },
+                            snap.last_attested_at.map(|t| t.to_string()).unwrap_or_else(|| "never".to_string())
+                        ),
+                        None => "daemon: no snapshot yet".to_string(),
+                    },
+                    Err(_) => "daemon: status lock poisoned".to_string(),
+                };
                 log_service_event(&format!(
-                    "Service Heartbeat: IPC keep-alive active. Iteration #{}. Monitoring engine: NOT WIRED (fail-closed status).",
-                    tick_count / 12
+                    "Service Heartbeat: Iteration #{}. Monitoring: {}.",
+                    tick_count / 12,
+                    status_line
                 ));
             }
         }

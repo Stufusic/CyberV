@@ -2,6 +2,10 @@
 //!
 //! Ref: Docs/rv15.md Section 7, 8:
 //! "CodeIntegrityVerifier: Truy vấn trạng thái Code Integrity qua NtQuerySystemInformation(SystemCodeIntegrityInformation)."
+//!
+//! P1-3: `query_kernel_ci()` giờ gọi NtQuerySystemInformation THẬT (ntdll).
+//! Khi truy vấn thất bại → fail-closed (CI=off, testsign/debug coi như bật,
+//! score 0) thay vì báo giá trị lành mạnh bịa.
 
 use serde::{Deserialize, Serialize};
 
@@ -17,8 +21,39 @@ pub struct SystemCodeIntegrityReport {
 
 pub struct CodeIntegrityVerifier;
 
+/// SYSTEM_INFORMATION_CLASS.SystemCodeIntegrityInformation = 103
+#[cfg(windows)]
+const SYSTEM_CODEINTEGRITY_INFORMATION: u32 = 103;
+
+/// SYSTEM_CODEINTEGRITY_INFORMATION.CodeIntegrityOptions bit flags (Windows SDK)
+#[cfg(windows)]
+mod ci_flags {
+    pub const CODEINTEGRITY_OPTION_ENABLED: u32 = 0x1;
+    pub const CODEINTEGRITY_OPTION_TESTSIGN: u32 = 0x2;
+    pub const CODEINTEGRITY_OPTION_DEBUGMODE: u32 = 0x4;
+    pub const CODEINTEGRITY_OPTION_HVCI_KMCI_ENABLED: u32 = 0x400;
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct SystemCodeIntegrityInformation {
+    length: u32,
+    code_integrity_options: u32,
+}
+
+#[cfg(windows)]
+#[link(name = "ntdll")]
+extern "system" {
+    fn NtQuerySystemInformation(
+        system_information_class: u32,
+        system_information: *mut u8,
+        system_information_length: u32,
+        return_length: *mut u32,
+    ) -> i32; // NTSTATUS
+}
+
 impl CodeIntegrityVerifier {
-    /// Đánh giá trạng thái Code Integrity thực tế của hệ điều hành
+    /// Đánh giá trạng thái Code Integrity từ các cờ đã truy vấn (pure function)
     pub fn evaluate_status(
         is_ci_enabled: bool,
         is_hvci_kmci_enabled: bool,
@@ -55,10 +90,88 @@ impl CodeIntegrityVerifier {
         }
     }
 
-    /// Truy vấn trực tiếp trạng thái trên Windows x64 (hoặc cung cấp baseline an toàn)
+    /// P1-3: truy vấn CI/HVCI THẬT qua ntdll trên Windows x64.
+    /// Truy vấn thất bại → fail-closed: coi như CI tắt + testsign/debug bật
+    /// (score 0, phần tệ nhất) — tuyệt đối không báo lành mạnh giả.
     pub fn query_kernel_ci() -> SystemCodeIntegrityReport {
-        // Trong môi trường thực tế, NtQuerySystemInformation với SystemCodeIntegrityInformation (103)
-        // được gọi để lấy các cờ CODEINTEGRITY_OPTION_ENABLED, CODEINTEGRITY_OPTION_HVCI_KMCI_ENABLED...
-        Self::evaluate_status(true, true, false, false)
+        #[cfg(windows)]
+        {
+            let mut info = SystemCodeIntegrityInformation {
+                length: std::mem::size_of::<SystemCodeIntegrityInformation>() as u32,
+                code_integrity_options: 0,
+            };
+            let mut return_length: u32 = 0;
+
+            // SAFETY: buffer 8 byte hợp lệ cho struct {u32, u32}; return_length hợp lệ
+            let status = unsafe {
+                NtQuerySystemInformation(
+                    SYSTEM_CODEINTEGRITY_INFORMATION,
+                    &mut info as *mut _ as *mut u8,
+                    std::mem::size_of::<SystemCodeIntegrityInformation>() as u32,
+                    &mut return_length,
+                )
+            };
+
+            if status == 0 {
+                // NTSTATUS_SUCCESS
+                let o = info.code_integrity_options;
+                let report = Self::evaluate_status(
+                    o & ci_flags::CODEINTEGRITY_OPTION_ENABLED != 0,
+                    o & ci_flags::CODEINTEGRITY_OPTION_HVCI_KMCI_ENABLED != 0,
+                    o & ci_flags::CODEINTEGRITY_OPTION_TESTSIGN != 0,
+                    o & ci_flags::CODEINTEGRITY_OPTION_DEBUGMODE != 0,
+                );
+                return SystemCodeIntegrityReport {
+                    summary: format!("[queried via NtQuerySystemInformation] {}", report.summary),
+                    ..report
+                };
+            }
+
+            // Truy vấn thất bại: fail-closed (phần tệ nhất)
+            let mut report = Self::evaluate_status(false, false, true, true);
+            report.summary = format!(
+                "[UNVERIFIED — NtQuerySystemInformation failed, NTSTATUS 0x{:08X}; fail-closed worst case] {}",
+                status as u32, report.summary
+            );
+            report
+        }
+        #[cfg(not(windows))]
+        {
+            let mut report = Self::evaluate_status(false, false, true, true);
+            report.summary = format!(
+                "[UNVERIFIED — non-Windows platform; fail-closed worst case] {}",
+                report.summary
+            );
+            report
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn evaluate_status_scoring_is_pure() {
+        let full = CodeIntegrityVerifier::evaluate_status(true, true, false, false);
+        assert_eq!(full.integrity_score, 10000);
+
+        let no_ci = CodeIntegrityVerifier::evaluate_status(false, true, false, false);
+        assert_eq!(no_ci.integrity_score, 5000);
+
+        let testsign = CodeIntegrityVerifier::evaluate_status(true, true, true, false);
+        assert_eq!(testsign.integrity_score, 6000);
+    }
+
+    /// P1-3: trên Windows thật, query phải thực sự gọi API — summary ghi rõ
+    /// nguồn; nếu query thất bại thì phải fail-closed (score 0).
+    #[test]
+    fn query_kernel_ci_reports_honest_source() {
+        let report = CodeIntegrityVerifier::query_kernel_ci();
+        if report.summary.contains("UNVERIFIED") {
+            assert_eq!(report.integrity_score, 0, "query fail = score tệ nhất");
+        } else {
+            assert!(report.summary.contains("queried"), "{}", report.summary);
+        }
     }
 }

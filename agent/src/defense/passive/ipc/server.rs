@@ -41,6 +41,9 @@ pub mod win_server {
         /// kernel xác nhận, cho phép kết nối cục bộ) khi chưa cấu hình allowlist.
         /// `Some(list)` = fail-closed: mọi PID ngoài danh sách bị từ chối.
         allowed_client_pids: Option<Vec<u32>>,
+        /// Snapshot trạng thái daemon thật (P1-2). None = daemon chưa chạy →
+        /// GetStatus trả UNKNOWN fail-closed.
+        status_snapshot: Option<crate::daemon_runner::SharedAgentStatus>,
     }
 
     impl NamedPipeServer {
@@ -49,7 +52,18 @@ pub mod win_server {
                 pipe_name: pipe_name.into(),
                 is_running: Arc::new(AtomicBool::new(false)),
                 allowed_client_pids: None,
+                status_snapshot: None,
             }
+        }
+
+        /// Gắn snapshot trạng thái daemon thật — GetStatus sẽ phản ánh trạng
+        /// thái này thay vì trả UNKNOWN tĩnh.
+        pub fn with_status_snapshot(
+            mut self,
+            snapshot: crate::daemon_runner::SharedAgentStatus,
+        ) -> Self {
+            self.status_snapshot = Some(snapshot);
+            self
         }
 
         /// Bật allowlist PID fail-closed (PID lấy qua GetNamedPipeClientProcessId
@@ -110,6 +124,7 @@ pub mod win_server {
                 // Handle client in an async task
                 let mut server = server;
                 let allowed_pids = self.allowed_client_pids.clone();
+                let status_snap = self.status_snapshot.clone();
                 tokio::spawn(async move {
                     let client_pid = Self::query_client_pid(&server);
                     if let (Some(pids), Some(cp)) = (&allowed_pids, client_pid) {
@@ -156,7 +171,7 @@ pub mod win_server {
                     };
 
                     let raw_bytes = &buffer[..n];
-                    let mut resp = handle_ipc_message(raw_bytes);
+                    let mut resp = handle_ipc_message_with(raw_bytes, status_snap.as_ref());
                     // Dinh kem PID client do KERNEL xac nhan de ben nhan kiem chung
                     // nguon phan hoi - PID tu khai trong envelope khong dang tin.
                     if let Some(data) = resp.data.as_mut() {
@@ -185,7 +200,16 @@ pub mod win_server {
             .as_secs()
     }
 
-    fn handle_ipc_message(raw_bytes: &[u8]) -> IpcResponsePayload {
+    /// Wrapper không-snapshot (dùng cho test + tương thích call-site cũ)
+    #[allow(dead_code)]
+    pub(crate) fn handle_ipc_message(raw_bytes: &[u8]) -> IpcResponsePayload {
+        handle_ipc_message_with(raw_bytes, None)
+    }
+
+    fn handle_ipc_message_with(
+        raw_bytes: &[u8],
+        status_snapshot: Option<&crate::daemon_runner::SharedAgentStatus>,
+    ) -> IpcResponsePayload {
         let envelope = match IpcProtocolValidator::parse_and_validate(raw_bytes) {
             Ok(env) => env,
             Err(e) => {
@@ -239,14 +263,18 @@ pub mod win_server {
                 }
             }
             IpcCommand::GetStatus => {
-                // TRUNG THỰC (fail-closed): server IPC standalone chưa có đường
-                // dữ liệu tới daemon/driver nên KHÔNG được phép báo
-                // "PROTECTED/ATTESTED" hay hash xác minh bịa. Trạng thái không
-                // biết phải là UNKNOWN + is_verified=false.
-                IpcResponsePayload {
-                    message_id: envelope.message_id,
-                    success: true,
-                    data: Some(serde_json::json!({
+                // TRUNG THỰC (fail-closed): nếu daemon thật đang chạy (P1-2),
+                // phản ánh snapshot tick thật; nếu không, trả UNKNOWN tĩnh —
+                // tuyệt đối không bịa PROTECTED/hash.
+                let snapshot_data = status_snapshot.and_then(|snap| {
+                    snap.read().ok().and_then(|guard| {
+                        guard
+                            .as_ref()
+                            .map(crate::daemon_runner::snapshot_to_getstatus_value)
+                    })
+                });
+                let data = snapshot_data.unwrap_or_else(|| {
+                    serde_json::json!({
                         "protection": {
                             "state": "UNKNOWN",
                             "substate": "STATUS_SOURCE_UNAVAILABLE",
@@ -265,7 +293,12 @@ pub mod win_server {
                         "hardware_verified": false,
                         "tpm_contradiction": null,
                         "verification_hash": null
-                    })),
+                    })
+                });
+                IpcResponsePayload {
+                    message_id: envelope.message_id,
+                    success: true,
+                    data: Some(data),
                     error: None,
                     timestamp: now,
                 }

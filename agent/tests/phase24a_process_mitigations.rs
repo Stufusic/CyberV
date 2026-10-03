@@ -89,11 +89,38 @@ fn test_09_process_mitigation_score_full_hardened() {
 
 #[test]
 fn test_10_process_mitigation_degraded_partial_score() {
-    let config = ProcessMitigationConfig {
-        prohibit_dynamic_code: false, // ACG off
-        restrict_image_load: false,   // Remote images allowed
-        ..Default::default()
+    // P1-3: apply_and_verify báo TRẠNG THÁI TRUY VẤN thật của tiến trình —
+    // sets từ các test trước trong cùng process là một chiều (one-way) nên
+    // không thể assert giá trị tuyệt đối ở đây. Trọng số spec được kiểm chứng
+    // qua hàm thuần túy score_from_flags:
+    use cyberv_agent::defense::passive::process_mitigations::QueriedFlags;
+    let q = QueriedFlags {
+        ext_disabled: true,       // +2000
+        strict_raise: true,       // +1500
+        img_no_remote: true,      // +1500
+        child_deny: false,        // +1000 (safe override)
+        acg_prohibit: false,      // ACG off  -> mất 2000
+        img_no_low_label: false,  // remote images allowed -> mất 2000
+        all_queried: true,
     };
-    let status = ProcessMitigationManager::apply_and_verify(&config);
-    assert_eq!(status.mitigation_score, 6000); // 10000 - 2000 - 2000
+    assert_eq!(ProcessMitigationManager::score_from_flags(&q), 6000); // 10000 - 2000 - 2000
+
+    // Và report thật phải self-consistent: score = hàm của chính cờ nó báo
+    let status = ProcessMitigationManager::apply_and_verify(&Default::default());
+    if status.is_verified {
+        let real = QueriedFlags {
+            acg_prohibit: status.is_acg_active,
+            ext_disabled: status.is_extension_point_disabled,
+            img_no_low_label: status.is_image_load_restricted,
+            img_no_remote: status.is_whql_enforced,
+            strict_raise: status.is_strict_handle_active,
+            child_deny: !status.allow_child_helpers,
+            all_queried: true,
+        };
+        let _ = &real;
+        assert_eq!(
+            status.mitigation_score,
+            ProcessMitigationManager::score_from_flags(&real)
+        );
+    }
 }

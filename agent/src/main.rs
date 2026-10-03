@@ -97,7 +97,20 @@ async fn main() {
             print_usage();
         }
         "run" => {
-            run_interactive_demo().await;
+            // P1-2: có cấu hình thật -> chạy daemon thật (foreground);
+            // không cấu hình -> demo mock với banner TRUNG THỰC rõ ràng.
+            match cyberv_agent::service_config::AgentServiceConfig::load_from_default_path() {
+                Ok(Some(config)) => run_real_foreground(config).await,
+                Ok(None) => {
+                    println!("[!] Không có agent_config.json — chuyển sang DEMO MODE.");
+                    run_interactive_demo().await;
+                }
+                Err(e) => {
+                    eprintln!("[-] Config lỗi: {} — KHÔNG chạy daemon với cấu hình hỏng.", e);
+                    eprintln!("    Sửa file config hoặc xóa nó để dùng DEMO MODE.");
+                    std::process::exit(1);
+                }
+            }
         }
         other => {
             eprintln!("[-] Unknown command: '{}'", other);
@@ -105,6 +118,71 @@ async fn main() {
             std::process::exit(1);
         }
     }
+}
+
+/// P1-2: chạy AgentDaemon thật ở foreground (dùng chung logic với Windows Service).
+async fn run_real_foreground(config: cyberv_agent::service_config::AgentServiceConfig) {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+
+    println!("================================================================================");
+    println!("  CyberV Security Agent - REAL MONITORING MODE (v{})", PROTOCOL_VERSION);
+    println!("  Server: {}", config.server_url);
+    println!("  Attestation interval: {}s", config.attestation_interval_secs);
+    println!("  Nhấn Ctrl+C để dừng.");
+    println!("================================================================================");
+
+    let status = cyberv_agent::daemon_runner::new_shared_status();
+    let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let flag = shutdown.clone();
+        tokio::spawn(async move {
+            if tokio::signal::ctrl_c().await.is_ok() {
+                println!("\n[!] Nhận Ctrl+C — đang dừng daemon...");
+                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+    }
+
+    let runner_status = status.clone();
+    let reporter = tokio::spawn(async move {
+        let mut last_state = String::new();
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            let snap = runner_status.read().ok().and_then(|g| g.clone());
+            if let Some(s) = snap {
+                if s.state != last_state {
+                    println!(
+                        "[{}] state={} driver={} graph=v{}",
+                        chrono_free_now(),
+                        s.state,
+                        if s.driver_available { "yes" } else { "no" },
+                        s.graph_version
+                    );
+                    last_state = s.state;
+                }
+            }
+        }
+    });
+
+    let result =
+        cyberv_agent::daemon_runner::run_configured_daemon(config, status, shutdown).await;
+    reporter.abort();
+    match result {
+        Ok(()) => println!("[+] Daemon dừng sạch."),
+        Err(e) => {
+            eprintln!("[-] Daemon dừng với lỗi: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+fn chrono_free_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 async fn run_interactive_demo() {
@@ -119,6 +197,11 @@ async fn run_interactive_demo() {
     println!("  Cryptographic Standard: SHA-512 (NSA CNSA Suite / FIPS 180-4)");
     println!("  Layer A: Hardware Observation | Layer B: Device Evidence Graph Engine");
     println!("================================================================================");
+    println!();
+    println!("  >>> DEMO MODE - MOCK DATA <<<");
+    println!("  >>> Moi du lieu phan cung va server ben duoi la MO PHONG (khong phai bao ve that).");
+    println!("  >>> De bao ve thuc su: tao %ProgramData%/CyberV/agent_config.json roi chay lai 'run'.");
+    println!();
 
     match collect_hardware_snapshot() {
         Ok(snapshot) => {
