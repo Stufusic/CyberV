@@ -3,18 +3,46 @@
 <div align="center">
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Rust: 1.75+](https://img.shields.io/badge/Rust-1.75%2B_Stable-orange.svg)](https://www.rust-lang.org)
+[![Rust: 1.98.1 Pinned](https://img.shields.io/badge/Rust-1.98.1_Pinned-orange.svg)](rust-toolchain.toml)
 [![Platform: Windows 10/11 x64](https://img.shields.io/badge/Platform-Windows_10%2F11_x64-0078D6.svg)](https://microsoft.com/windows)
 [![Crypto: FIPS 180-4 & RFC 8032](https://img.shields.io/badge/Crypto-SHA--512_%2F_Ed25519-green.svg)](https://csrc.nist.gov)
 [![Kernel: KMDF 1.15](https://img.shields.io/badge/Kernel-KMDF_1.15_Altitude_385201-red.svg)](driver/CyberVProbe)
-[![Tests: 240+ Passing](https://img.shields.io/badge/Tests-240%2B_Passing-success.svg)](agent/tests)
-[![Mutation Score: 100%](https://img.shields.io/badge/Mutation_Score-100%25_Killed-brightgreen.svg)](Docs/security_baseline.md)
+[![Tests: 530+ Passing](https://img.shields.io/badge/Tests-530%2B_Passing-success.svg)](agent/tests)
+[![CI: clippy -D warnings + cargo-deny](https://img.shields.io/badge/CI-clippy_DW%20%2B%20cargo--deny-blue.svg)](.github/workflows/rust.yml)
+
+> ⚠️ **Trạng thái triển khai thực tế (đọc trước khi tin bất kỳ tuyên bố nào dưới
+> đây):** lõi mật mã + logic ra quyết định + cổng cập nhật là **thật và được
+> kiểm chứng bằng test**; các giác quan phần cứng (TPM thật, dữ liệu kernel,
+> telemetry hệ thống, daemon chạy trong service) **vẫn đang mô phỏng và được
+> gắn nhãn trung thực** — lộ trình hiện thực: `Docs/PHASE1_2_IMPLEMENTATION_PLAN.md`.
+> Ma trận đầy đủ từng mối đe dọa: [`Docs/THREAT_MODEL.md`](Docs/THREAT_MODEL.md).
 
 **Nền tảng xác thực định danh thiết bị và phòng vệ điểm cuối gắn chặt phần cứng (Hardware-Anchored Device Identity & Endpoint Trust) thế hệ mới dành cho Windows.**
 
 [Kiến Trúc](#1-kiến-trúc-tổng-thể) • [Tính Năng Cốt Lõi](#2-các-tính-năng-kỹ-thuật-cốt-lõi) • [Bất Biến An Ninh](#3-ma-trận-bất-biến-an-ninh-core-invariants) • [Tải Về & Khởi Chạy Nhanh](#4-hướng-dẫn-tải-về--khởi-chạy-nhanh-download--quick-start) • [Desktop Native UI](#5-giao-diện-máy-trạm-độc-lập-cyberv-uiexe) • [Dịch Vụ Windows SCM](#6-quản-trị-windows-service) • [Driver Kernel](#7-quy-trình-biên-dịch--ký-số-driver) • [Giới Hạn & Lộ Trình](#10-giới-hạn-hiện-tại--lộ-trình-nghiên-cứu-current-limitations--research-roadmap) • [Bảo Mật & Đóng Góp](#11-chính-sách-bảo-mật--đóng-góp)
 
 </div>
+
+---
+
+## 📚 Bản đồ Tài liệu (Documentation Map)
+
+> **EN: Find your documentation fast — one audience per document.**
+
+| Bạn muốn… | Đọc đâu |
+|---|---|
+| Chạy thử / cài đặt | Mục [4](#4-hướng-dẫn-tải-về--khởi-chạy-nhanh-download--quick-start) + [`USER_GUIDE.md`](USER_GUIDE.md) |
+| Hiểu kiến trúc tổng thể & biên giới tin cậy | Mục [1](#1-kiến-trúc-tổng-thể) + [`Docs/ARCHITECTURE.md`](Docs/ARCHITECTURE.md) *(M-D1)* |
+| Sửa một module cụ thể | [`Docs/CONTEXT_MAP.md`](Docs/CONTEXT_MAP.md) → README của module đó *(M-D2)* |
+| Biết bất biến an ninh nào chi phối code mình sắp sửa | [`Docs/INVARIANTS.md`](Docs/INVARIANTS.md) |
+| Là AI assistant / onboarding quy ước | [`AGENTS.md`](AGENTS.md) |
+| Spec wire format (IOCTL ABI, IPC frame, chữ ký) | [`Docs/API_PROTOCOLS.md`](Docs/API_PROTOCOLS.md) *(M-D1)* |
+| Vận hành / xử lý sự cố / quản lý key | [`Docs/OPERATIONS.md`](Docs/OPERATIONS.md) + [`Docs/KEY_MANAGEMENT.md`](Docs/KEY_MANAGEMENT.md) *(M-D3)* |
+| Đánh giá rủi ro an ninh từng mối đe dọa | [`Docs/THREAT_MODEL.md`](Docs/THREAT_MODEL.md) |
+| Lộ trình phát triển & ký số | [`Docs/PHASE1_2_IMPLEMENTATION_PLAN.md`](Docs/PHASE1_2_IMPLEMENTATION_PLAN.md) + [`Docs/PIPELINE_SECURITY_PLAN.md`](Docs/PIPELINE_SECURITY_PLAN.md) + [`Docs/DRIVER_SIGNING_RUNBOOK.md`](Docs/DRIVER_SIGNING_RUNBOOK.md) |
+| Quy tắc đóng góp / báo cáo lỗ hổng | [`SECURITY.md`](SECURITY.md) + [`CONTRIBUTING.md`](CONTRIBUTING.md) *(M-D3)* |
+
+*(mục *(M-Dx)* đang theo `Docs/DOCUMENTATION_PLAN.md` — tạo trong các cột mốc tiếp theo)*
 
 ---
 
@@ -455,6 +483,23 @@ Dự án **CyberV** được định vị là **Nền tảng kiến trúc an nin
 - [ ] **v1.2 (Trung hạn):** Tích hợp Syzkaller test harness và mở rộng bộ fuzzing ma trận IOCTL vào luồng CI/CD.
 - [ ] **v1.3 (Trung hạn):** Bổ sung File System Minifilter cơ bản để bảo vệ tệp vault cục bộ dưới tầng Ring-0.
 - [ ] **v2.0 (Dài hạn):** Đăng ký WHQL Attestation và tích hợp cơ chế cô lập nhân dựa trên VBS (Virtualization-Based Security / Enclave).
+
+---
+
+### 10.3. Lộ Trình Ký Số Phát Hành (Release Signing Roadmap)
+
+Trạng thái chuỗi tin cậy phát hành phần mềm (chi tiết: `Docs/PIPELINE_SECURITY_PLAN.md`, `Docs/DRIVER_SIGNING_RUNBOOK.md`):
+
+| Lớp ký | Phương án | Trạng thái |
+| :--- | :--- | :--- |
+| **Update Authority (Ed25519)** — ký manifest cập nhật phần mềm | Ký offline bởi maintainer, chia sẻ Shamir **2-of-3**; key công khai pin vào agent qua `CYBERV_UPDATE_AUTHORITY_PUBLIC_KEY` (env) hoặc `update_authority.pub`. Công cụ: `cargo build --release -p cyberv-agent --bin cyberv-keygen` | ✅ **Tooling hoàn tất** (`agent/src/bin/cyberv-keygen.rs`, gate verify fail-closed đã wire) — maintainer chạy `generate` trên máy khí-gap để tạo key thật |
+| **Binary user-mode (agent/UI)** — Authenticode | EV Code Signing cert + HSM token, ký trên signing machine (không đưa private key vào CI) | ⏳ M1 — chờ mua EV cert |
+| **Kernel driver (CyberVProbe.sys)** — Attestation signing | Submit CAB qua Microsoft Partner Center (dùng EV cert đã có) | ⏳ M1 — chờ EV cert + Hardware Dev Center |
+
+> **Nguyên tắc:** mọi bản cập nhật mà agent nhận về đều bắt buộc qua cổng
+> `verify_update_manifest()` — chữ ký Ed25519 của Update Authority trên
+> manifest **và** băm SHA-512 của byte gói thật. Chưa cấu hình key authority
+> (máy mới) ⟹ **tất cả cập nhật bị từ chối** (fail-closed).
 
 ---
 
