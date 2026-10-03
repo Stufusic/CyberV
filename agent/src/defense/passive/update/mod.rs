@@ -3,10 +3,15 @@
 //! Ref: Docs/rv13.md Section 7:
 //! Staged installation, atomic activation, anti-rollback and manifest verification.
 
+pub mod authority;
 pub mod manifest;
 pub mod staging;
 pub mod version_policy;
 
+pub use authority::{
+    load_pinned_authority_key, parse_authority_public_key, verify_update_manifest,
+    UPDATE_AUTHORITY_PUBKEY_ENV,
+};
 pub use manifest::UpdatePackageManifest;
 pub use staging::{
     CommitStage, PendingCommitMarker, StartupRecoveryAction, UpdateStagingManager,
