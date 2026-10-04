@@ -425,8 +425,23 @@ mô phỏng ghi rõ nguồn khi công bố).
 | Bandwidth overhead | ≤ 50 KB/s idle; ≤ 500 KB/s lúc incident |
 | Scalability runs | 2 / 10 / 50 / 100 / 256 node — đúng bound graph §3 |
 
-Bảng số liệu lưu vào mục benchmark của chính tài liệu này mỗi release — số
-không đạt → không mở phase tiếp theo (tinh thần close condition).
+### 11.1 Kết quả đo tầng pure (NSG-3.5, `mesh-sim`)
+
+Nguồn đo: **single-process máy dev, release build, 300 rounds (2026-10-04)** —
+KHÔNG phải distributed; latency/bandwidth mạng là NSG-2b/NSG-7. CI chỉ khóa
+trần lỏng (`agent/tests/mesh_bench.rs`); số này cập nhật mỗi release.
+
+| Metric (pure tier) | Đo thực tế | Trần CI |
+|---|---|---|
+| Quorum decision (256 phiếu, avg/round) | **1.96 µs** | < 20 ms |
+| Handshake 3 bước trọn vẹn (avg, gồm RNG+Ed25519+X25519) | **196 µs** | < 50 ms |
+| Seal + open frame 512B (avg/pair) | **2.99 µs** | < 2 ms |
+| Gossip ingest 1000 event (đã ký sẵn) | **26.3 ms** (~26 µs/event) | < 2 s |
+| Graph fill bound + GC (256n/2048e) | **695 µs** | < 1 s |
+
+Đối chiếu mục tiêu §11: evidence processing đo được ~38k events/s (ingest)
+>> 100 events/s; quorum decision ~2µs >> mục tiêu ≤ 3 s — hai đường nóng CPU
+có dư địa rất lớn so với gate. Distributed metrics chờ transport thật.
 
 ---
 
@@ -536,6 +551,7 @@ spool, clock skew — recover đúng hoặc báo degraded, không im lặng.
 | NSG-1.6 | ✅ Đã hiện thực | `mesh/consistency.rs` (DegradedEpoch, marker ký, merge 3 nhánh, shared-parent independence); `mesh_consistency_tests.rs` (8) |
 | NSG-2 | ⚠️ Tầng session ✅ / mDNS wiring ❌ | `mesh/session.rs` (bắt tay 3 bước X25519 + AEAD ChaCha20-Poly1305 hai chiều + replay window 128 commit-sau-tag); `mesh/discovery.rs` (beacon codec); `mesh_session_tests.rs` (11 — MITM thay PK, downgrade 2 chiều, khóa lạ qua Hello nhưng vỡ ở Confirm, reflection role, replay, frame bounds, **bắt tay trọn vẹn + trao đổi mã hóa qua TCP loopback thật**). Phần còn lại: **NSG-2b** mDNS socket + wire vào daemon (crate discovery phải qua cargo-deny/machete) |
 | NSG-3 | ✅ Pure logic / ❌ transport wiring | `mesh/gossip.rs` (GossipInbox flood-limit per-peer, stats phân loại replay/poison/stale + đếm đủ); `mesh/shadow.rs` (ShadowLedger — **không có API thực thi**, `executed` bất biến false); `mesh/correlation.rs` (IOC sweep + SuspectRank format §7.2 — confidence per-mille, independent_sources tái dùng cùng greedy independence với quorum, FP indicators bắt buộc); `mesh_gossip_tests.rs` (8 end-to-end). Phát hiện thêm 1 lỗ hổng: poison clone cùng event_id lọt dedupe → sửa fail-closed (ràng buộc id↔nội dung trước dedupe). Gossip transport thật chờ NSG-2b |
+| NSG-3.5 | ✅ Pure tier (distributed chờ NSG-2b/7) | `mesh/sim.rs` + `bin/mesh-sim.rs` + `mesh_bench.rs` (5 trần CI); số đo §11.1: quorum 256 phiếu ~2µs, handshake ~196µs, seal+open ~3µs, ingest ~26µs/event, graph fill ~0.7ms — dư địa lớn so gate |
 | NSG-4…NSG-8 | ❌ Planned | NSG-4 gate: freeze gate Trụ 1 + D2.3 (shadow → pilot chỉ sau khi wrong-action rate đạt ngưỡng benign set) |
 
 Ghi chú khác biệt nhỏ giữa plan → code (cố ý, ghi trung thực):

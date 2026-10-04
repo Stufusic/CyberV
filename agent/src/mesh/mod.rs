@@ -21,6 +21,7 @@ pub mod quorum;
 pub mod reputation;
 pub mod session;
 pub mod shadow;
+pub mod sim;
 
 use thiserror::Error;
 
