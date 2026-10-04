@@ -30,7 +30,7 @@ scripts/          PowerShell: build/package/sign/install + mutation testing
 |---|---|---|---|---|---|
 | `daemon` | State machine tự hành: enroll → attest → detect mutation → re-enroll; offline grace | `AgentDaemon<T,C>`, `AgentState` | `phase6_transport_daemon.rs` | transport, hardware, fingerprint | ✅ logic; ✅ wired vào service qua `daemon_runner` (P1-2, config-gated) |
 | `defense` | Tầng phòng vệ tổng hợp: policy engine + passive coordinator | `SecurityPolicyEngine`, `PassiveDefenseReport` | `phase20_fusion_policy_engine.rs`, `phase24h` | mọi submodule passive | ✅ fail-closed (INV-001) |
-| `defense::passive::ipc` | Named pipe server UI↔agent: bắt tay X25519 1-chiều (client pin agent), phiên AEAD ChaCha20-Poly1305, replay window, DACL thật (SetKernelObjectSecurity), allowlist PID kernel | `NamedPipeServer`, `IpcProtocolValidator`, `pipe_session` | `ipc_session_tests.rs` + in-module `protocol.rs` tests | tokio, windows-sys, mesh::session | ✅ P1-1a (agent side); ⚠️ UI Python P1-1b; GetStatus đọc snapshot daemon thật |
+| `defense::passive::ipc` | Named pipe server UI↔agent: bắt tay X25519 1-chiều (client pin agent), phiên AEAD ChaCha20-Poly1305, replay window, DACL thật (SetKernelObjectSecurity), allowlist PID kernel | `NamedPipeServer`, `IpcProtocolValidator`, `pipe_session` | `ipc_session_tests.rs` + in-module `protocol.rs` tests | tokio, windows-sys, mesh::session | ✅ P1-1 cả agent lẫn UI (golden vectors chéo ngôn ngữ); GetStatus đọc snapshot daemon thật |
 | `defense::passive::isolation` | Broker/Worker privilege separation + admission chính sách | `CoreBroker`, `NetworkWorkerDaemon`, `BrokerPolicyAdmissionController`, `compute_frame_mac` | `phase24h` Group F-I + in-module | ed25519, hmac | ✅ MAC bắt buộc trước sequence (INV chặn signing oracle) |
 | `defense::passive::update` | Secure update: manifest gate, hai-phase staging, version policy, authority pinning | `UpdatePackageManifest`, `UpdateStagingManager`, `verify_update_manifest` | `phase24e`, in-module 3 file | ed25519, sha2 | ✅ gate fail-closed; ❌ hạ tầng feed ở M1 |
 | `defense::passive::syscall` | Baseline ntdll + hook/stub integrity | `StubIntegrityChecker` | `phase24h` | — | ⚠️ baseline refresh chưa được ký (P2-4) |
@@ -75,7 +75,7 @@ scripts/          PowerShell: build/package/sign/install + mutation testing
 
 | Package | Mục đích | Test | Trạng thái |
 |---|---|---|---|
-| `ipc/` | Named pipe client (ctypes), protocol bounds | `test_adversarial_ipc.py` | ✅ handshake verify nonce echo; ⚠️ blocking read không deadline (P1-4) |
+| `ipc/` | Named pipe client (ctypes): bắt tay X25519 + pin khóa agent + phiên AEAD ChaCha20-Poly1305 khớp Rust qua golden vectors | `test_pipe_session.py`, `test_adversarial_ipc.py` | ✅ P1-1b; ⚠️ blocking read không deadline (P1-4) |
 | `security/` | `display_policy.resolve_display_state` — gatekeeper bất biến hiển thị | `test_state_mapping.py`, `test_ui_mutations.py` | ✅ fail-closed (UNKNOWN không bao giờ thành PROTECTED) |
 | `services/` | `AgentServiceProvider` (poll agent), activation (UAC) | chưa có (P1-4) | ⚠️ defaults fail-closed đã vá; UAC script path cần Inno installer (F9) |
 | `viewmodels/` | State per page (dashboard/recovery/diagnostics) | một phần | ⚠️ diagnostics còn 5 check PASS tĩnh (F7 — P1-4) |

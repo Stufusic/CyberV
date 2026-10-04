@@ -62,10 +62,19 @@ broker và "trao" cho worker trong bộ nhớ (mô phỏng handshake). Chưa có
 >   server_seen_client_pid từ kernel, fail-closed không-key, replay đóng
 >   kết nối, frame quá hạn mức đóng, downgrade version bị từ chối; + 5 unit
 >   test handshake (MITM thay PK, pin sai khóa, downgrade, decode).
-> - ⏳ **P1-1b (còn lại): phía Python UI** — client handshake + AEAD frames
->   (crate `cryptography` có sẵn ChaCha20Poly1305) + pin khóa agent + verify
->   `server_seen_client_pid`. Cho tới khi P1-1b xong, UI cũ không nói chuyện
->   được với server mới — hành vi hiển thị UI là UNKNOWN fail-closed (an toàn).
+> - ✅ **P1-1b ĐÃ HIỆN THỰC (2026-10-04): phía Python UI** —
+>   `cyberv_ui/ipc/pipe_session.py`: codec handshake + HKDF/AEAD đối xứng
+>   từng byte với Rust; `cyberv_ui/ipc/client.py`: `NamedPipeClient` phiên
+>   AEAD (thiếu khóa pin / thiếu package `cryptography` / bắt tay thất bại →
+>   fail-closed, KHÔNG downgrade plaintext); verify `server_seen_client_pid`
+>   khớp PID chính mình (pipe-squatting check). Agent publish khóa công khai
+>   vào `%PROGRAMDATA%\CyberV\agent_public_key.hex` (SYSTEM ghi, Users chỉ
+>   đọc — pinning trust anchor, best-effort có log).
+> - ✅ **Golden vectors chéo ngôn ngữ**: test Rust
+>   (`pipe_golden_vectors_are_stable`) + test Python (`test_pipe_session.py`)
+>   khẳng định CÙNG bộ vector (client_pk/server_pk/ack_sig/sealed frame,
+>   seed 0x42/0x43) — đổi implementation bên nào cũng vỡ test bên kia, chặn
+>   lệch giao thức giữa agent và UI. 13 test Python mới (43 tổng).
 > - ⏳ Ghi nhận trung thực: grant DACL cho user console ở chế độ service cần
 >   WTS API (hiện SDDL theo plan; dev mode agent chạy dưới user thường).
 

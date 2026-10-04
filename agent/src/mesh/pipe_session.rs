@@ -340,4 +340,82 @@ mod pipe_tests {
         let ack = PipeHelloAck { version: 1, pk_ephemeral: [3; 32], identity_sig: [4; 64] };
         assert_eq!(PipeHelloAck::decode(&ack.encode()).unwrap(), ack);
     }
+
+    // ---- Golden vectors: neo chéo ngôn ngữ Rust <-> Python (P1-1b) ----
+    // Khoa co dinh seed [0x42]/[0x43] - moi gia tri deterministic.
+
+    fn gold_client_eph() -> StaticSecret {
+        StaticSecret::from([0x42u8; 32])
+    }
+
+    fn gold_identity() -> DeviceIdentityKey {
+        use crate::identity::secret::Secret32;
+        DeviceIdentityKey::from_secret_bytes(&Secret32::new([0x42u8; 32])).unwrap()
+    }
+
+    fn hex(b: &[u8]) -> String {
+        b.iter().map(|x| format!("{:02x}", x)).collect()
+    }
+
+    #[test]
+    #[ignore = "generator - chay: cargo test --release -p cyberv-agent --lib generate_pipe_golden -- --ignored --nocapture"]
+    fn generate_pipe_golden_vectors() {
+        let identity = gold_identity();
+        let client_eph = gold_client_eph();
+        let client_pk = PublicKey::from(&client_eph).to_bytes();
+        let server_eph = StaticSecret::from([0x43u8; 32]);
+        let server_pk = PublicKey::from(&server_eph).to_bytes();
+
+        let hello = PipeHello { version: MESH_WIRE_VERSION, pk_ephemeral: client_pk };
+        let (ack, _server_session) =
+            server_handle_pipe_hello(&hello, &identity, &server_eph, &server_pk).unwrap();
+        let mut client_session =
+            client_finish_pipe_handshake(&ack, identity.verifying_key(), &client_eph, &client_pk)
+                .unwrap();
+        let frame = client_session.seal(1, b"gold-vectors").unwrap();
+
+        println!("client_pk = {}", hex(&client_pk));
+        println!("server_pk = {}", hex(&server_pk));
+        println!("ack_sig   = {}", hex(&ack.identity_sig));
+        println!("frame     = {}", hex(&frame));
+    }
+
+    /// Gia tri sinh boi generate_pipe_golden_vectors (seed 0x42/0x43, version 1)
+    /// — Python khai bao CUNG cac hang so nay trong test_pipe_session.py.
+    const GOLD_CLIENT_PK: &str =
+        "132c442be010fbd57e72603328aa76e71fccc1503aae219327d14d9c9993f472";
+    const GOLD_SERVER_PK: &str =
+        "cdefd8783a91b446640e2e1f95599db35e484a0071bd2182b3b60d0812c10c70";
+    const GOLD_ACK_SIG: &str =
+        "e23e84e827e8258f5092cc76645c421382eb34083e994caed90a0b3d1eda0c4d\
+         fade275f8ec3f77bd46b6e861d9261fc7c0e3a2c81482d8fa0ff46daaa296a05";
+    const GOLD_FRAME: &str =
+        "0000002900000001010000000000000000f85797135398f3e3db9e5e2529dbd2\
+         56389c1e105c6c008355d80914";
+
+    /// Neo on dinh: cac vector sinh tu generate_pipe_golden_vectors phai KHONG
+    /// DOI khi doi implementation - Python (cyberv_ui/ipc/pipe_session.py)
+    /// khong dinh CUNG cac gia tri nay (test cheo ngon ngu).
+    #[test]
+    fn pipe_golden_vectors_are_stable() {
+        let identity = gold_identity();
+        let client_eph = gold_client_eph();
+        let client_pk = PublicKey::from(&client_eph).to_bytes();
+        let server_eph = StaticSecret::from([0x43u8; 32]);
+        let server_pk = PublicKey::from(&server_eph).to_bytes();
+
+        assert_eq!(hex(&client_pk), GOLD_CLIENT_PK, "client_pk golden lech");
+        assert_eq!(hex(&server_pk), GOLD_SERVER_PK, "server_pk golden lech");
+
+        let hello = PipeHello { version: MESH_WIRE_VERSION, pk_ephemeral: client_pk };
+        let (ack, _server_session) =
+            server_handle_pipe_hello(&hello, &identity, &server_eph, &server_pk).unwrap();
+        let mut client_session =
+            client_finish_pipe_handshake(&ack, identity.verifying_key(), &client_eph, &client_pk)
+                .unwrap();
+        let frame = client_session.seal(1, b"gold-vectors").unwrap();
+
+        assert_eq!(hex(&ack.identity_sig), GOLD_ACK_SIG, "ack_sig golden lech");
+        assert_eq!(hex(&frame), GOLD_FRAME, "frame golden lech");
+    }
 }

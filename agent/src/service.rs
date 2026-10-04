@@ -370,6 +370,29 @@ mod win32_service {
                     // chỉ nhận ERR) — không bao giờ phục vụ phiên plaintext.
                     let pipe_identity =
                         crate::daemon_runner::load_or_create_identity().ok().map(|(k, _)| k);
+                    // P1-1b: xuất public key cho UI pin (best-effort). UI đọc
+                    // file này để pin khóa agent — thiếu file → UI fail-closed
+                    // UNKNOWN. ProgramData do SYSTEM ghi: Users chỉ đọc được,
+                    // không thay thế được (pinning trust anchor).
+                    if let Some(ref key) = pipe_identity {
+                        let pub_hex = key.public_key_hex();
+                        let pin_dir = std::env::var("PROGRAMDATA").unwrap_or_default();
+                        if !pin_dir.is_empty() {
+                            let dir = std::path::Path::new(&pin_dir).join("CyberV");
+                            let pin_path = dir.join("agent_public_key.hex");
+                            match std::fs::create_dir_all(&dir)
+                                .and_then(|_| std::fs::write(&pin_path, format!("{}\n", pub_hex)))
+                            {
+                                Ok(()) => log_service_event(&format!(
+                                    "IPC: agent public key published cho UI pinning ({})",
+                                    pin_path.display()
+                                )),
+                                Err(e) => log_service_event(&format!(
+                                    "IPC: KHÔNG publish được public key ({e}) — UI sẽ fail-closed"
+                                )),
+                            }
+                        }
+                    }
                     let server = crate::defense::passive::ipc::server::win_server::NamedPipeServer::new(
                         crate::defense::passive::ipc::server::DEFAULT_PIPE_NAME,
                     )
