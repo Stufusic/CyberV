@@ -24,11 +24,12 @@ pub struct IpcResponsePayload {
 #[cfg(windows)]
 pub mod win_server {
     use super::*;
+    use crate::identity::rng::{OsCryptoRng, SecureRandom};
     use std::os::windows::io::AsRawHandle;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::AsyncWriteExt;
     use tokio::net::windows::named_pipe::ServerOptions;
 
     /// Thời hạn tối đa một kết nối được phép im lặng (chống chiếm dụng instance).
@@ -44,6 +45,9 @@ pub mod win_server {
         /// Snapshot trạng thái daemon thật (P1-2). None = daemon chưa chạy →
         /// GetStatus trả UNKNOWN fail-closed.
         status_snapshot: Option<crate::daemon_runner::SharedAgentStatus>,
+        /// Khóa identity để ký handshake pipe (P1-1). `None` = fail-closed:
+        /// mọi kết nối chỉ nhận ERR rồi bị đóng — không có phiên plaintext.
+        identity_key: Option<crate::identity::keypair::DeviceIdentityKey>,
     }
 
     impl NamedPipeServer {
@@ -53,7 +57,18 @@ pub mod win_server {
                 is_running: Arc::new(AtomicBool::new(false)),
                 allowed_client_pids: None,
                 status_snapshot: None,
+                identity_key: None,
             }
+        }
+
+        /// Gắn khóa identity (P1-1) — bắt buộc để phục vụ phiên AEAD. Không
+        /// có khóa = server từ chối mọi kết nối (fail-closed, INV-012).
+        pub fn with_identity_key_opt(
+            mut self,
+            key: Option<crate::identity::keypair::DeviceIdentityKey>,
+        ) -> Self {
+            self.identity_key = key;
+            self
         }
 
         /// Gắn snapshot trạng thái daemon thật — GetStatus sẽ phản ánh trạng
@@ -121,70 +136,143 @@ pub mod win_server {
                     continue;
                 }
 
+                // P1-1: áp DACL THẬT lên instance ngay sau khi tạo. Thất bại
+                // thì warn TO và vẫn phục vụ với default DACL — fail-stop
+                // (đóng instance) = tự chối phục vụ vô thời hạn, không hơn.
+                if let Err(e) = crate::defense::passive::ipc::PipeAclManager::apply_hardened_dacl(
+                    server.as_raw_handle(),
+                ) {
+                    warn!("Áp DACL hardened thất bại (fallback default DACL): {e}");
+                }
+
                 // Handle client in an async task
                 let mut server = server;
                 let allowed_pids = self.allowed_client_pids.clone();
                 let status_snap = self.status_snapshot.clone();
+                let identity_key = self.identity_key.clone();
                 tokio::spawn(async move {
                     let client_pid = Self::query_client_pid(&server);
                     if let (Some(pids), Some(cp)) = (&allowed_pids, client_pid) {
                         if !pids.contains(&cp) {
                             warn!("IPC client PID {} denied by allowlist", cp);
-                            let resp = IpcResponsePayload {
-                                message_id: "ERR".to_string(),
-                                success: false,
-                                data: None,
-                                error: Some("IPC client not authorized".to_string()),
-                                timestamp: now_secs(),
-                            };
-                            if let Ok(resp_json) = serde_json::to_vec(&resp) {
-                                let _ = server.write_all(&resp_json).await;
-                                let _ = server.flush().await;
-                            }
+                            send_plaintext_err(&mut server, "IPC client not authorized").await;
                             return;
                         }
                     }
 
-                    // Read deadline: client connect roi im lang khong duoc giu
-                    // instance vinh vien (chong resource-exhaustion DoS).
-                    let mut buffer = vec![0u8; MAX_IPC_MESSAGE_SIZE];
-                    let read = tokio::time::timeout(
-                        Duration::from_secs(IPC_READ_TIMEOUT_SECS),
-                        server.read(&mut buffer),
-                    )
-                    .await;
+                    // P1-1: phiên AEAD BẮT BUỘC. Không có khóa identity =
+                    // fail-closed: chỉ trả ERR plaintext rồi đóng (không bao
+                    // giờ phục vụ envelope qua kênh không xác thực server).
+                    let Some(identity) = identity_key.as_ref() else {
+                        warn!("IPC server thiếu khóa identity — từ chối kết nối (fail-closed)");
+                        send_plaintext_err(&mut server, "IPC server identity unavailable (fail-closed)")
+                            .await;
+                        return;
+                    };
 
-                    let n = match read {
-                        Ok(Ok(n)) if n > 0 => n,
-                        Ok(Ok(_)) => return, // client dong ket noi
-                        Ok(Err(e)) => {
-                            error!("Pipe read error: {}", e);
-                            return;
-                        }
-                        Err(_) => {
-                            warn!(
-                                "Pipe read timeout ({}s), dropping client",
-                                IPC_READ_TIMEOUT_SECS
-                            );
+                    // ---- Bắt tay 2 bước (P1-1): PipeHello → PipeHelloAck ----
+                    let hello_frame = match read_wire_frame(&mut server, PIPE_HANDSHAKE_MAX).await {
+                        Ok(f) => f,
+                        Err(e) => {
+                            warn!("IPC handshake read lỗi: {e}");
                             return;
                         }
                     };
-
-                    let raw_bytes = &buffer[..n];
-                    let mut resp = handle_ipc_message_with(raw_bytes, status_snap.as_ref());
-                    // Dinh kem PID client do KERNEL xac nhan de ben nhan kiem chung
-                    // nguon phan hoi - PID tu khai trong envelope khong dang tin.
-                    if let Some(data) = resp.data.as_mut() {
-                        if let Some(obj) = data.as_object_mut() {
-                            obj.insert(
-                                "server_seen_client_pid".to_string(),
-                                serde_json::json!(client_pid),
-                            );
+                    let hello = match crate::mesh::pipe_session::PipeHello::decode(&hello_frame)
+                    {
+                        Ok(h) => h,
+                        Err(e) => {
+                            warn!("PipeHello không hợp lệ: {e}");
+                            send_plaintext_err(&mut server, "Invalid handshake").await;
+                            return;
                         }
+                    };
+                    let mut server_seed = [0u8; 32];
+                    if OsCryptoRng.fill(&mut server_seed).is_err() {
+                        error!("OS RNG thất bại — đóng kết nối (fail-closed)");
+                        return;
                     }
-                    if let Ok(resp_json) = serde_json::to_vec(&resp) {
-                        let _ = server.write_all(&resp_json).await;
-                        let _ = server.flush().await;
+                    let server_eph = x25519_dalek::StaticSecret::from(server_seed);
+                    let server_pk = x25519_dalek::PublicKey::from(&server_eph).to_bytes();
+                    let (ack, mut session) = match crate::mesh::pipe_session::server_handle_pipe_hello(
+                        &hello,
+                        identity,
+                        &server_eph,
+                        &server_pk,
+                    ) {
+                        Ok(x) => x,
+                        Err(e) => {
+                            warn!("Bắt tay pipe thất bại: {e}");
+                            send_plaintext_err(&mut server, "Handshake rejected").await;
+                            return;
+                        }
+                    };
+                    if server.write_all(&ack.encode()).await.is_err() || server.flush().await.is_err()
+                    {
+                        return;
+                    }
+                    info!("IPC phiên AEAD thiết lập xong (PID {:?})", client_pid);
+
+                    // ---- Vòng lặp phiên: frame AEAD → envelope JSON → phản hồi ----
+                    // Mỗi frame phải mở bằng tag AEAD hợp lệ; replay/tamper →
+                    // đóng kết nối (client phải bắt tay lại).
+                    loop {
+                        let frame = match tokio::time::timeout(
+                            Duration::from_secs(IPC_READ_TIMEOUT_SECS),
+                            read_wire_frame(&mut server, MAX_IPC_FRAME_BOUND),
+                        )
+                        .await
+                        {
+                            Ok(Ok(f)) => f,
+                            Ok(Err(e)) => {
+                                info!("IPC kết nối kết thúc: {e}");
+                                return;
+                            }
+                            Err(_) => {
+                                warn!(
+                                    "Pipe read timeout ({}s), dropping client",
+                                    IPC_READ_TIMEOUT_SECS
+                                );
+                                return;
+                            }
+                        };
+                        let (_frame_type, payload) = match session.open(&frame) {
+                            Ok(x) => x,
+                            Err(e) => {
+                                // Replay/tamper — đóng ngay, không phản hồi.
+                                warn!("Frame AEAD không hợp lệ, đóng kết nối: {e}");
+                                return;
+                            }
+                        };
+                        let mut resp =
+                            handle_ipc_message_with(&payload, status_snap.as_ref());
+                        // Đính kèm PID client do KERNEL xác nhận — PID tự khai
+                        // trong envelope không đáng tin.
+                        if let Some(data) = resp.data.as_mut() {
+                            if let Some(obj) = data.as_object_mut() {
+                                obj.insert(
+                                    "server_seen_client_pid".to_string(),
+                                    serde_json::json!(client_pid),
+                                );
+                            }
+                        }
+                        let resp_json = match serde_json::to_vec(&resp) {
+                            Ok(j) => j,
+                            Err(e) => {
+                                error!("Serialize phản hồi thất bại: {e}");
+                                return;
+                            }
+                        };
+                        let out = match session.seal(1, &resp_json) {
+                            Ok(o) => o,
+                            Err(e) => {
+                                error!("Seal phản hồi thất bại: {e}");
+                                return;
+                            }
+                        };
+                        if server.write_all(&out).await.is_err() || server.flush().await.is_err() {
+                            return;
+                        }
                     }
                 });
             }
@@ -198,6 +286,55 @@ pub mod win_server {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs()
+    }
+
+    /// Trần frame bắt tay (PipeHello/PipeHelloAck — kích thước nhỏ cố định).
+    pub const PIPE_HANDSHAKE_MAX: usize = 512;
+    /// Trần frame phiên: envelope ≤ 64KB + header AEAD + tag Poly1305.
+    pub const MAX_IPC_FRAME_BOUND: usize = MAX_IPC_MESSAGE_SIZE + 128;
+
+    /// Đọc 1 frame wire: `len(u32 BE) || body`. Chặn bound TRƯỚC khi cấp phát.
+    async fn read_wire_frame(
+        server: &mut tokio::net::windows::named_pipe::NamedPipeServer,
+        max: usize,
+    ) -> std::io::Result<Vec<u8>> {
+        use tokio::io::AsyncReadExt;
+        let mut len_buf = [0u8; 4];
+        server.read_exact(&mut len_buf).await?;
+        let len = u32::from_be_bytes(len_buf) as usize;
+        if len > max {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("frame vượt giới hạn: {len}"),
+            ));
+        }
+        let mut body = vec![0u8; len];
+        server.read_exact(&mut body).await?;
+        let mut full = Vec::with_capacity(4 + len);
+        full.extend_from_slice(&len_buf);
+        full.extend_from_slice(&body);
+        Ok(full)
+    }
+
+    /// Phản hồi lỗi PRE-HANDSHAKE — plaintext CÓ CHỦ ĐÍCH: trước khi phiên
+    /// AEAD thiết lập thì chưa có khóa để mã hóa; nội dung chỉ là lỗi chung
+    /// chung, không lộ trạng thái nào (INV-012 không bị vi phạm vì không có
+    /// envelope lệnh nào được phục vụ qua kênh plaintext).
+    async fn send_plaintext_err(
+        server: &mut tokio::net::windows::named_pipe::NamedPipeServer,
+        error: &str,
+    ) {
+        let resp = IpcResponsePayload {
+            message_id: "ERR".to_string(),
+            success: false,
+            data: None,
+            error: Some(error.to_string()),
+            timestamp: now_secs(),
+        };
+        if let Ok(resp_json) = serde_json::to_vec(&resp) {
+            let _ = server.write_all(&resp_json).await;
+            let _ = server.flush().await;
+        }
     }
 
     /// Wrapper không-snapshot (dùng cho test + tương thích call-site cũ)

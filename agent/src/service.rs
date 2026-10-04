@@ -365,10 +365,16 @@ mod win32_service {
         std::thread::spawn(move || {
             if let Ok(rt) = tokio::runtime::Runtime::new() {
                 rt.block_on(async {
+                    // P1-1: khóa identity cho handshake pipe (từ DPAPI vault).
+                    // Không nạp được = server chạy fail-closed (mọi kết nối
+                    // chỉ nhận ERR) — không bao giờ phục vụ phiên plaintext.
+                    let pipe_identity =
+                        crate::daemon_runner::load_or_create_identity().ok().map(|(k, _)| k);
                     let server = crate::defense::passive::ipc::server::win_server::NamedPipeServer::new(
                         crate::defense::passive::ipc::server::DEFAULT_PIPE_NAME,
                     )
-                    .with_status_snapshot(agent_status.clone());
+                    .with_status_snapshot(agent_status.clone())
+                    .with_identity_key_opt(pipe_identity);
                     let ipc_task = tokio::spawn(async move {
                         let _ = server.run_server().await;
                     });

@@ -43,12 +43,31 @@
 Hiện trạng: frame đã có HMAC-SHA512 với session key, nhưng session key hiện được sinh phía
 broker và "trao" cho worker trong bộ nhớ (mô phỏng handshake). Chưa có DACL thật trên pipe.
 
-> **CẬP NHẬT 2026-10-04:** phần **primitive đã hiện thực sẵn** tại
-> `agent/src/mesh/session.rs` (NSG-2) — handshake 3 bước X25519 + chữ ký
-> identity bám transcript + HKDF-SHA512 + AEAD ChaCha20-Poly1305 hai chiều +
-> replay window, kèm 11 test tích hợp (MITM/downgrade/replay/TCP loopback).
-> Việc còn lại của P1-1 là **wire vào pipe IPC + DACL thật + pinning UI**,
-> tái dụng nguyên khối này (một primitive, hai nơi dùng).
+> **CẬP NHẬT 2026-10-04 (b) — P1-1a ĐÃ HIỆN THỰC phía agent:**
+> - ✅ Primitive tái dụng từ NSG-2 (`mesh/session.rs` + `mesh/pipe_session.rs`):
+>   bắt tay 2 bước X25519 — client gửi PipeHello(pk_ephemeral), agent trả
+>   PipeHelloAck **ký Ed25519 identity bám version + CẢ HAI PK** (client pin
+>   khóa agent — chống MITM/squatting); HKDF-SHA512 → 2 khóa 2 chiều; AEAD
+>   ChaCha20-Poly1305 thay HMAC cho mọi envelope; replay window 128
+>   commit-sau-tag.
+> - ✅ `ipc/server.rs`: vòng lặp phiên per-connection (trước đây 1 message/
+>   connection); frame sai/replay → đóng kết nối; không có khóa identity →
+>   fail-closed (chỉ ERR plaintext rồi đóng — không bao giờ phục vụ envelope
+>   qua kênh không xác thực server); bound chặn trước cấp phát.
+> - ✅ `ipc/pipe_acl.rs`: DACL THẬT qua `SetKernelObjectSecurity` với
+>   SDDL `D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;AC)` áp ngay sau tạo instance
+>   (trước đây chỉ là descriptor ghi nhớ, chưa áp).
+> - ✅ `service.rs` wire khóa identity từ DPAPI vault (`load_or_create_identity`).
+> - ✅ 5 test tích hợp pipe thật: roundtrip GetStatus/HeartbeatPing với
+>   server_seen_client_pid từ kernel, fail-closed không-key, replay đóng
+>   kết nối, frame quá hạn mức đóng, downgrade version bị từ chối; + 5 unit
+>   test handshake (MITM thay PK, pin sai khóa, downgrade, decode).
+> - ⏳ **P1-1b (còn lại): phía Python UI** — client handshake + AEAD frames
+>   (crate `cryptography` có sẵn ChaCha20Poly1305) + pin khóa agent + verify
+>   `server_seen_client_pid`. Cho tới khi P1-1b xong, UI cũ không nói chuyện
+>   được với server mới — hành vi hiển thị UI là UNKNOWN fail-closed (an toàn).
+> - ⏳ Ghi nhận trung thực: grant DACL cho user console ở chế độ service cần
+>   WTS API (hiện SDDL theo plan; dev mode agent chạy dưới user thường).
 
 - [ ] Thêm crate `x25519-dalek`, `chacha20poly1305`, `hkdf` (đã có).
 - [ ] Handshake 3 bước trên pipe: `ClientHello(PK_ephemeral)` → `ServerHello(PK_ephemeral, sig Ed25519 của agent)` → derived session key `HKDF(x25519, transcript)`.

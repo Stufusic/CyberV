@@ -62,3 +62,5 @@ wmi = "0.18.4"
 
 [dev-dependencies]
 tempfile = "3.10"
+# Client-side handshake cho ipc_session_tests (cùng crate với main deps)
+x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }

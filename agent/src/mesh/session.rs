@@ -56,7 +56,7 @@ pub enum Role {
 }
 
 impl Role {
-    const fn as_u8(self) -> u8 {
+    pub const fn as_u8(self) -> u8 {
         match self {
             Role::Initiator => 1,
             Role::Responder => 2,
@@ -721,3 +721,4 @@ mod tests {
         assert!(HandshakeMessage::decode(&truncated).is_err());
     }
 }
+

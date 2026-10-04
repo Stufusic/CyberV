@@ -17,6 +17,7 @@ pub mod discovery;
 pub mod events;
 pub mod graph;
 pub mod gossip;
+pub mod pipe_session;
 pub mod quorum;
 pub mod reputation;
 pub mod session;

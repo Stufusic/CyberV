@@ -29,4 +29,49 @@ impl PipeAclManager {
             is_hardened: true,
         }
     }
+
+    /// Áp DACL THẬT lên handle pipe (P1-1): SDDL theo plan —
+    /// `D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;AC)` — protected DACL, chỉ
+    /// SYSTEM + Administrators + All Application Packages. Được gọi NGAY sau
+    /// khi instance được tạo (SetKernelObjectSecurity trên handle hiện hành).
+    ///
+    /// Trung thực (ghi plan P1-1): grant cho user console ở chế độ service là
+    /// việc còn lại (cần truy SID console user qua WTS API) — ở dev, agent
+    /// chạy dưới user thường nên pipe do chính user đó tạo.
+    #[cfg(windows)]
+    pub fn apply_hardened_dacl(handle: std::os::windows::io::RawHandle) -> Result<(), String> {
+        use windows_sys::Win32::Foundation::LocalFree;
+        use windows_sys::Win32::Security::Authorization::{
+            ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+        };
+        use windows_sys::Win32::Security::{DACL_SECURITY_INFORMATION, SetKernelObjectSecurity};
+
+        const SDDL: &str = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;AC)";
+        let sddl_w: Vec<u16> = SDDL.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut sd_ptr: *mut core::ffi::c_void = std::ptr::null_mut();
+        let mut sd_len = 0u32;
+        // SAFETY: sddl_w là wide-string null-terminated hợp lệ; sd_ptr/sd_len
+        // do Windows cấp phát và được LocalFree sau khi dùng xong.
+        let ok = unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                sddl_w.as_ptr(),
+                SDDL_REVISION_1,
+                &mut sd_ptr,
+                &mut sd_len,
+            )
+        };
+        if ok == 0 {
+            return Err("ConvertStringSecurityDescriptorToSecurityDescriptorW thất bại".into());
+        }
+        // SAFETY: handle hợp lệ do tokio pipe quản lý; SD còn sống đến sau lời
+        // gọi (LocalFree sau SetKernelObjectSecurity).
+        let set_ok = unsafe {
+            SetKernelObjectSecurity(handle as isize, DACL_SECURITY_INFORMATION, sd_ptr)
+        };
+        unsafe { LocalFree(sd_ptr) };
+        if set_ok == 0 {
+            return Err("SetKernelObjectSecurity thất bại".into());
+        }
+        Ok(())
+    }
 }

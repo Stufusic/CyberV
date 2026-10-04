@@ -188,14 +188,16 @@ sớm, (b) tránh quên. Chúng PHẢI có test trước khi gate D2 mở (xem
   thực bị drop **và đếm được**. Vote không đủ provenance (thiếu evidence_root /
   obs_channel / signal_class) không vào quorum — chỉ là telemetry L0.
 - **Nguồn:** `Docs/NETWORK_SECURITY_GRAPH_PLAN.md` v2 §5, §14 (INV-012).
-- **Hiện trạng (NSG-1 + NSG-2 session):** `mesh::events::NsgEvent::verify`
-  chặn event_id không khớp nội dung + chữ ký sai; `Ballot::from_event` trả
-  None khi thiếu provenance; `EventLog::accept` chặn replay/hết hạn/epoch bất
-  hợp lệ. **Tầng session AEAD đã hiện thực** (`mesh/session.rs`): bắt tay 3
-  bước X25519 + chữ ký identity bám transcript, AEAD ChaCha20-Poly1305 hai
-  chiều, replay window 128 commit-sau-tag — test chứng minh MITM thay PK,
-  downgrade, khóa lạ, reflection đều bị từ chối. Chưa có I/O production:
-  mDNS socket + wiring daemon là NSG-2b; DACL pipe vẫn P1-1.
+- **Hiện trạng (NSG-1 + NSG-2 session + P1-1a pipe):** `mesh::events::
+  NsgEvent::verify` chặn event_id không khớp nội dung + chữ ký sai;
+  `Ballot::from_event` trả None khi thiếu provenance; `EventLog::accept` chặn
+  replay/hết hạn/epoch bất hợp lệ. **Tầng session AEAD đã hiện thực** cả mesh
+  (`mesh/session.rs`, 3 bước mutual) lẫn **pipe IPC** (`mesh/pipe_session.rs`
+  + `ipc/server.rs`: bắt tay 2 bước một chiều — client pin khóa agent, xác
+  thực client qua PID kernel + DACL; envelope chỉ được phục vụ qua phiên
+  AEAD; replay/tamper → đóng kết nối; server thiếu khóa identity → fail-closed
+  ERR rồi đóng; DACL thật qua SetKernelObjectSecurity). Chưa có I/O mesh
+  production: mDNS socket + wiring daemon là NSG-2b. Phía Python UI là P1-1b.
 - **Vi phạm nếu:** accept frame không sign/AEAD vì "LAN tin được"; nâng trust
   từ presence thay vì handshake chữ ký; ballot thiếu provenance vẫn vào quorum.
 
