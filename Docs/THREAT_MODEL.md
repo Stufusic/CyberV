@@ -68,6 +68,28 @@
 | 4.8 | Spoofing | Driver giả mạo tráo dữ liệu kernel | Chưa có attestation driver ↔ agent (driver signing là bước đầu) | ❌ Phase 2 (P2-2 + attestation signing) |
 | 4.9 | Repudiation | Telemetry bị agent "chế" | Agent không tự sinh telemetry khi driver vắng mặt (fail-closed UNKNOWN) | ✅ Đã vá (C11) |
 
+## T5 — Mesh NSG (Node ↔ Node qua LAN/WiFi-Direct/BLE) — 📐 planned
+
+> Biên giới mới theo `Docs/NETWORK_SECURITY_GRAPH_PLAN.md` v2. Mã đe dọa M1–M12
+> tương ứng T1–T12 trong plan. **Toàn bộ kiểm soát mới là thiết kế chưa code**
+> (NSG-0…NSG-8) — không mục nào được trình bày như "đã bảo vệ" cho tới khi có
+> test chứng minh (Zero Deceptive Signals / INV-009 planned).
+
+| # | STRIDE | Mối đe dọa | Kiểm soát thiết kế | Trạng thái |
+|---|--------|------------|-----------|------------|
+| M1 | Spoofing | Sybil: node giả enroll hàng loạt tạo quorum giả | Enroll + attestation (khóa device); TrustScore cold-start cap ghim trọng số node mới; quorum independence 5 điều kiện; bound graph 256 node | ❌ NSG-1.5 |
+| M2 | Tampering | Replay/MITM frame giữa node | AEAD session + sequence monotonic + nonce window; handshake chữ ký identity; MITM không khóa → fail | ❌ NSG-2 (P1-1 primitive) |
+| M3 | Elevation | Node bị chiếm phát lệnh cách ly giả cho cả mạng | Quorum independence có trọng số (pairwise 5 điều kiện + weighted); evidence_root bắt buộc; reputation decay; revoke qua transparency | ❌ NSG-1/1.5 |
+| M4 | DoS | False-quarantine: report đơn lẻ cắt node lành | Report đơn = L0 telemetry; shadow mode mặc định; TTL bắt buộc; recovery ký authority; wrong-action rate đo trên benign set trước auto | ❌ NSG-4 |
+| M5 | DoS | Poison/flood gossip | Flood-limit per-peer, frame bound, dedupe event_id, drop đếm được (INV-015) | ❌ NSG-3 |
+| M6 | Info disclosure | Rò rỉ telemetry/serial giữa node | Selective disclosure — chỉ indicator + merkle ref; retention 90 ngày; server chỉ giữ metadata | ❌ NSG-3 |
+| M7 | DoS | Partition/split-brain hai phân mạng cách ly nhầm nhau | Epoch + DegradedEpoch + merge protocol 3 nhánh; stale-epoch vote bị loại; safety over liveness (xung đột → Suspect) | ❌ NSG-1.6 |
+| M8 | Spoofing | Rendezvous (Supabase) bị chiếm/nói dối | Server chỉ giới thiệu — trust không bao giờ đến từ server; client verify chữ ký peer độc lập | ❌ NSG-5 |
+| M9 | Spoofing | Transport yếu (BT/WiFi-Direct) làm cửa sau | Tier A/B/C: BLE chỉ beacon discovery, không mang mesh frame; WiFi-Direct flag-tắt mặc định | ❌ NSG-5 |
+| M10 | DoS | Resource/CPU/memory exhaustion (graph flooding, merkle proof khổng lồ, handshake storm) | INV-015: mọi queue/graph/evidence store bound cứng + drop đếm được; rate-limit per-source; cap proof size; disk quota | ❌ NSG-1 |
+| M11 | DoS | State explosion (node/incident/edge tăng vô hạn) | Bound graph; incident TTL + archive; edge GC; epoch compaction | ❌ NSG-1/1.6 |
+| M12 | Elevation | Malware local-admin thao túng mesh state/IPC của chính node | State/config mesh ACL hóa; config ký authority; IPC allowlist PID + AEAD; **residual trung thực:** admin chạm được software vault → vault shield + PPL (M1) + TPM (P2-1); node nghi bị chiếm tự isolate | ❌ NSG-4 |
+
 ---
 
 ## Rủi ro được chấp nhận (Accepted Risks)
