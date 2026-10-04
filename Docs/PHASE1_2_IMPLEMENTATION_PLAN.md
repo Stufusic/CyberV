@@ -124,6 +124,21 @@ Mỗi probe phải gọi Win32 API thật, và khi không gọi được phải 
 ## 3. PHASE 2 — Nền tảng phần cứng thật (Root-of-Trust thực chất)
 
 ### P2-1. TPM Base Services thật — 8 ngày
+
+> **CẬP NHẬT 2026-10-04 (a) — P2-1a TBS foundation ĐÃ HIỆN THỰC:**
+> `agent/src/trust/tpm/tbs.rs` — TPM2 command marshalling PURE (NV_Read /
+> NV_Increment / NV_DefineSpace kiểu TPM_NT_COUNTER với owner auth rỗng;
+> parser response fail-closed) + `TbsContext` (Tbsi_Context_Create qua
+> TBS_CONTEXT_PARAMS2 TPM_VERSION_20, fallback V1; Tbsip_Submit_Command;
+> Drop đóng context) + `TbsNvCounter` hiện thực `TpmNvCounter` bằng TPM2
+> THẬT — assurance `HardwareBacked` CHỈ khi TBS mở được (INV-007).
+> **Phát hiện thực đo (2026-10-04, máy dev Win11 26200, tiến trình không
+> nâng quyền):** Tbsi_Context_Create trả `TBS_E_ACCESS_DENIED 0x8028400F` —
+> Windows chặn TPM từ user process. Production: agent chạy như service
+> (SYSTEM) → TBS được phép; runtime smoke `#[ignore]` phải chạy trong shell
+> admin để verify end-to-end (diagnostic rc trong panic message).
+> **P2-1b còn lại:** TPM-backed identity key (PCP/CNG route), rollback
+> protection wire vào daemon trên counter thật.
 - [ ] `WindowsTbsNvCounter`: `Tbsip_Submit_Command` với `TPM2_NV_ReadPublic` / `TPM2_NV_DefineSpace` (một lần provision) / `TPM2_NV_Increment`.
 - [ ] Khi probe TPM thất bại → trả `SoftwareFallback` + event; KHÔNG downgrade im lặng.
 - [ ] `TpmIdentityKey` thật: `NCryptOpenStorageProvider(MS_PLATFORM_CRYPTO_PROVIDER)` — chỉ giữ key handle reference; sign qua `NCryptSignHash`; private key không bao giờ vào RAM process.

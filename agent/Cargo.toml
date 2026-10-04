@@ -52,6 +52,7 @@ windows-sys = { version = "0.52", features = [
     "Win32_System_Pipes",
     "Win32_System_Services",
     "Win32_System_Threading",
+    "Win32_System_TpmBaseServices",
 ] }
 
 # Logging & Error handling (Điều 18, 19 - Rule.md)

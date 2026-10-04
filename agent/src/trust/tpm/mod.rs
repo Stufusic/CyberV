@@ -7,6 +7,7 @@ pub mod key;
 pub mod nv_counter;
 pub mod pcr;
 pub mod provider;
+pub mod tbs;
 pub mod quote;
 
 pub use capability::{TpmCapabilities, TpmStatus};
