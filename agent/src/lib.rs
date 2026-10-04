@@ -10,6 +10,7 @@ pub mod fingerprint;
 pub mod hardware;
 pub mod identity;
 pub mod kernel;
+pub mod mesh;
 pub mod privacy;
 pub mod protocol;
 pub mod risk;

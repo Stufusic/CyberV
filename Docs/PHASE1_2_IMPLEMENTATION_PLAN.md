@@ -43,6 +43,13 @@
 Hiện trạng: frame đã có HMAC-SHA512 với session key, nhưng session key hiện được sinh phía
 broker và "trao" cho worker trong bộ nhớ (mô phỏng handshake). Chưa có DACL thật trên pipe.
 
+> **CẬP NHẬT 2026-10-04:** phần **primitive đã hiện thực sẵn** tại
+> `agent/src/mesh/session.rs` (NSG-2) — handshake 3 bước X25519 + chữ ký
+> identity bám transcript + HKDF-SHA512 + AEAD ChaCha20-Poly1305 hai chiều +
+> replay window, kèm 11 test tích hợp (MITM/downgrade/replay/TCP loopback).
+> Việc còn lại của P1-1 là **wire vào pipe IPC + DACL thật + pinning UI**,
+> tái dụng nguyên khối này (một primitive, hai nơi dùng).
+
 - [ ] Thêm crate `x25519-dalek`, `chacha20poly1305`, `hkdf` (đã có).
 - [ ] Handshake 3 bước trên pipe: `ClientHello(PK_ephemeral)` → `ServerHello(PK_ephemeral, sig Ed25519 của agent)` → derived session key `HKDF(x25519, transcript)`.
 - [ ] Agent ký `ServerHello` bằng identity key — client pin public key này (chống MITM/squatting).
