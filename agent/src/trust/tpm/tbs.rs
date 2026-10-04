@@ -223,6 +223,7 @@ impl Drop for TbsContext {
 
 /// NV counter THẬT qua TBS. Máy không TPM → `ctx = None`, assurance báo
 /// `SoftwareFallback` trung thực và mọi thao tác trả `NotPresent`.
+#[derive(Debug)]
 pub struct TbsNvCounter {
     ctx: Option<TbsContext>,
     assurance: TpmAssuranceType,
@@ -248,12 +249,35 @@ impl TbsNvCounter {
         }
     }
 
+    // Clone thủ công: TBS handle không nhân bản được — bản clone mở context
+    // RIÊNG (tương đương về semantics). Nếu clone mở không được -> fallback
+    // SoftwareFallback trung thực, KHÔNG kế thừa HardwareBacked giả.
+    fn clone_with_fallback(&self) -> Self {
+        match TbsContext::new() {
+            Ok(ctx) => Self {
+                ctx: Some(ctx),
+                assurance: TpmAssuranceType::HardwareBacked,
+            },
+            Err(_) => Self {
+                ctx: None,
+                assurance: TpmAssuranceType::SoftwareFallback,
+            },
+        }
+    }
+
     pub fn tbs_available() -> bool {
         TbsContext::new().is_ok()
     }
 
     fn ctx(&self) -> Result<&TbsContext, TpmError> {
         self.ctx.as_ref().ok_or(TpmError::NotPresent)
+    }
+}
+
+impl Clone for TbsNvCounter {
+    fn clone(&self) -> Self {
+        //assurance gốc chỉ giữ khi clone mở context thành công
+        self.clone_with_fallback()
     }
 }
 

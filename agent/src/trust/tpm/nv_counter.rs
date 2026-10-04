@@ -249,17 +249,19 @@ impl TpmNvCounter for MockTpmNvCounter {
     }
 }
 
-/// Triển khai kết nối TPM Base Services (TBS) của Windows
+/// Triển khai TPM Base Services (TBS) của Windows — P2-1b wire.
 ///
-/// TRẠNG THÁI HIỆN TẠI (trung thực): lớp này CHƯA gửi lệnh TPM2 nào qua TBS —
-/// mọi thao tác đang chạy trên bộ đếm phần mềm in-process (mất khi reboot).
-/// Do đó `get_assurance_type()` trả `SoftwareFallback` thay vì `HardwareBacked`.
-/// Phase 2 sẽ thay `fallback` bằng `Tbsip_Submit_Command` thực sự
-/// (TPM2_NV_ReadPublic / DefineSpace / Increment) rồi khi đó mới nâng assurance.
+/// `new()` thử mở context TBS thật (`tbs::TbsNvCounter`, lệnh TPM2 thật):
+/// thành công (service SYSTEM/máy cho phép) -> assurance `HardwareBacked`
+/// và mọi thao tác đi qua TPM NV thật. Thất bại (không TPM / tiến trình bị
+/// chặn TBS_E_ACCESS_DENIED) -> fallback bộ đếm phần mềm in-process với
+/// assurance `SoftwareFallback` trung thực (INV-007 — không gian lận báo cáo).
 #[derive(Debug, Clone)]
 pub struct WindowsTbsNvCounter {
     assurance: TpmAssuranceType,
     fallback: MockTpmNvCounter,
+    /// Counter THẬT qua TBS — Some khi máy có TPM + tiến trình được phép.
+    tbs: Option<crate::trust::tpm::tbs::TbsNvCounter>,
 }
 
 impl Default for WindowsTbsNvCounter {
@@ -270,11 +272,18 @@ impl Default for WindowsTbsNvCounter {
 
 impl WindowsTbsNvCounter {
     pub fn new() -> Self {
+        // P2-1b: thử TBS thật trước — chỉ khi TPM 2.0 phản hồi thật mới
+        // nâng assurance lên HardwareBacked (không bao giờ tự xưng).
+        let tbs = crate::trust::tpm::tbs::TbsNvCounter::new();
+        let (tbs, assurance) = if tbs.get_assurance_type() == TpmAssuranceType::HardwareBacked {
+            (Some(tbs), TpmAssuranceType::HardwareBacked)
+        } else {
+            (None, TpmAssuranceType::SoftwareFallback)
+        };
         Self {
-            // INV-trung thực: bộ đếm hiện chạy trên RAM, không phải TPM NV —
-            // báo HardwareBacked ở đây là xác nhận giả về nền tảng chống rollback.
-            assurance: TpmAssuranceType::SoftwareFallback,
+            assurance,
             fallback: MockTpmNvCounter::new(TpmAssuranceType::SoftwareFallback),
+            tbs,
         }
     }
 }
@@ -285,17 +294,24 @@ impl TpmNvCounter for WindowsTbsNvCounter {
         nv_index: u32,
         initial_counter: u64,
     ) -> Result<TpmNvHandleInfo, TpmError> {
-        // Trên môi trường Windows sản xuất, lệnh TPM2_NV_ReadPublic và TPM2_NV_DefineSpace được gửi qua Tbsip_Submit_Command.
-        // Ở cấp độ an toàn, ta ủy thác qua fallback engine có xác thực đầy đủ.
+        if let Some(tbs) = self.tbs.as_mut() {
+            return tbs.discover_or_provision(nv_index, initial_counter);
+        }
         self.fallback
             .discover_or_provision(nv_index, initial_counter)
     }
 
     fn read_counter(&self, nv_index: u32) -> Result<u64, TpmError> {
+        if let Some(tbs) = self.tbs.as_ref() {
+            return tbs.read_counter(nv_index);
+        }
         self.fallback.read_counter(nv_index)
     }
 
     fn increment_counter(&mut self, nv_index: u32) -> Result<u64, TpmError> {
+        if let Some(tbs) = self.tbs.as_mut() {
+            return tbs.increment_counter(nv_index);
+        }
         self.fallback.increment_counter(nv_index)
     }
 
