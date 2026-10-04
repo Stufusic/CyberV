@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from PySide6.QtCore import QObject, QTimer, Signal
 
 from ..ipc.client import NamedPipeClient
+from ..ipc.pipe_session import load_pinned_agent_key
 from ..models.events import EventSeverity, SecurityEvent
 from ..models.protection import KernelShieldInfo, ProtectionState, ProtectionStateInfo
 from ..security.display_policy import resolve_display_state
@@ -35,7 +36,9 @@ class AgentServiceProvider(QObject):
         self.recovery_vm = recovery_vm
         self.diagnostics_vm = diagnostics_vm
 
-        self.client = NamedPipeClient()
+        # P1-1b: pin khóa agent từ %PROGRAMDATA%\CyberVgent_public_key.hex
+        # — thiếu khóa -> connect fail-closed (UI hiển thị UNKNOWN, an toàn).
+        self.client = NamedPipeClient(agent_public_key=load_pinned_agent_key())
         self.poll_timer = QTimer(self)
         self.poll_timer.setInterval(poll_interval_ms)
         self.poll_timer.timeout.connect(self.poll_agent)

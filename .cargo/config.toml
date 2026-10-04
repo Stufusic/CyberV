@@ -7,6 +7,10 @@
 rustflags = [
     "-C",
     "control-flow-guard=yes",
+    # R1: CRT tĩnh — cyberv-agent.exe chạy trên máy người dùng KHÔNG cần
+    # VCRUNTIME redist (single-exe distribution, HYBRID plan Tier A/B).
+    "-C",
+    "target-feature=+crt-static",
 ]
 
 [build]
