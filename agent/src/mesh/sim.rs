@@ -74,7 +74,7 @@ fn bench_quorum(rounds: usize) -> Duration {
                 r
             },
             causal_parents: vec![],
-            arrival_path: i as u64,
+            path_class: i as u64,
             weight: 1000,
         });
     }
@@ -236,5 +236,229 @@ pub fn run_full(rounds: usize) -> BenchReport {
         seal_open_avg: seal_open_total / rounds.max(1) as u32,
         gossip_ingest_1000: bench_gossip_ingest_1000(),
         graph_fill_and_gc: bench_graph_fill_bound(),
+    }
+}
+
+/// Kết quả mô phỏng isolate/recover/reconcile (M-PLAN §6.3).
+#[derive(Debug, Clone, Copy)]
+pub struct IsolationSimReport {
+    pub rounds: usize,
+    pub nodes: usize,
+    /// Số lệnh isolate đã phát (quorum hoặc alert).
+    pub isolations_issued: u64,
+    /// Số isolation được GC lift đúng TTL (INV-014 — phải = isolations
+    /// trừ số đang còn hạn cuối vòng đo; sim thiết kế để tất cả hết hạn).
+    pub ttl_lifts: u64,
+    /// Số đề nghị shadow đã ghi (Reached).
+    pub proposals_created: u64,
+    /// Số quyết định operator đã log (audit hai chiều).
+    pub decisions_logged: u64,
+    /// Số node bị stale khi partition rồi sống lại khi merge.
+    pub partition_staled: u64,
+    pub elapsed: Duration,
+}
+
+/// Mô phỏng isolate/recover/reconcile trên 256 node + chu kỳ partition/merge
+/// (M-PLAN §6.3: đo trước khi đụng WFP thật). Pure logic — dùng đúng
+/// MeshGraph + ShadowLedger + DecisionLog + quorum engine của production,
+/// KHÔNG mô hình song song riêng. Deterministic qua LCG nội bộ (không RNG
+/// hệ thống) để số liệu tái lập được.
+///
+/// Mô hình thời gian: mỗi round = 20s mono (EDGE_STALE_MS = 3 phút → node
+/// không refresh ~9 round sẽ stale — partition tác động thật trên đồ thị).
+/// Partition: nửa node không được refresh; merge: refresh lại (Discovered),
+/// đúng luật presence ≠ trust.
+pub fn run_isolation_sim(rounds: usize) -> IsolationSimReport {
+    use crate::mesh::events::{ObsChannel, SignalClass};
+    use crate::mesh::graph::{NodeState, ISOLATION_TTL_MS};
+    use crate::mesh::isolation::{DecisionAction, DecisionEntry, DecisionLog, EnforcementMode};
+    use crate::mesh::quorum::{evaluate_quorum, Ballot, QuorumPolicy};
+    use crate::mesh::shadow::ShadowLedger;
+
+    const N: usize = crate::mesh::graph::MAX_NODES; // 256
+    const STEP_MS: u64 = 20_000;
+    const PARTITION_EVERY: u64 = 16; // partition 11 round mỗi 16 round (> EDGE_STALE_MS/STEP)
+
+    let mut rng = 0x2545_F491_4F6C_DD1Du64; // seed cố định — sim tái lập được
+
+    let mut graph = MeshGraph::new();
+    let mut shadow = ShadowLedger::new();
+    let mut decisions = DecisionLog::new();
+    // Probation mô phỏng đúng engine: subject → tick sạch còn lại.
+    let mut probation: std::collections::HashMap<NodeId, u32> = std::collections::HashMap::new();
+    let mut observed: Vec<NodeId> = Vec::with_capacity(N);
+
+    for i in 0..N {
+        let id = nid((i % 256) as u8);
+        if !observed.contains(&id) {
+            observed.push(id);
+            let _ = graph.observe(id, 0);
+            let _ = graph.transition(&id, NodeState::Attested);
+        }
+    }
+
+    let mut isolations = 0u64;
+    let mut proposals = 0u64;
+    let mut decided = 0u64;
+    let mut partition_staled = 0u64;
+    let mut ttl_lifts = 0u64;
+    let start = Instant::now();
+
+    for round in 0..rounds {
+        let now = (round as u64).saturating_mul(STEP_MS);
+        let in_partition = round as u64 % PARTITION_EVERY >= 5;
+
+        // ---- 1. Refresh presence: toàn trừ nửa node khi partition (chúng
+        //      "mất dấu" → tick_gc sẽ stale đúng luật, không mutation ngoài).
+        for (i, id) in observed.iter().enumerate() {
+            let is_half = i < observed.len() / 2;
+            if !(in_partition && is_half) {
+                let _ = graph.observe(*id, now);
+            }
+        }
+
+        // ---- 2. Quorum đề nghị: hai phiếu "verified" từ HAI ĐƯỜNG khác nhau
+        //      (path_class mô phỏng: 2×round và 2×round+1), origin khác nhau.
+        let subject = observed[(rng % observed.len() as u64) as usize];
+        rng ^= rng << 13;
+        rng ^= rng >> 7;
+        rng ^= rng << 17;
+        let mut b1 = Ballot {
+            event_id: [round as u8, 1, 0xAA, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            origin_id: observed[(rng as usize) % observed.len()],
+            epoch: 0,
+            subject,
+            signal_class: SignalClass::Verified,
+            obs_channel: ObsChannel::Kernel,
+            evidence_root: [round as u8 + 1, 0xDE, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            causal_parents: vec![],
+            path_class: 2 * (round as u64),
+            weight: 1000,
+        };
+        b1.event_id[2] = 0xA1;
+        let mut b2 = Ballot {
+            event_id: [round as u8, 2, 0xBB, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            origin_id: observed[((rng >> 8) as usize + 1) % observed.len()],
+            epoch: 0,
+            subject,
+            signal_class: SignalClass::Verified,
+            obs_channel: ObsChannel::EtwTelemetry,
+            evidence_root: [round as u8 + 2, 0xDF, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            causal_parents: vec![],
+            path_class: 2 * (round as u64) + 1,
+            weight: 1000,
+        };
+        if b1.origin_id == b2.origin_id {
+            b2.origin_id = observed[(observed.len() - 1).saturating_sub((rng as usize) % observed.len())];
+        }
+        let outcome = evaluate_quorum(&[b1, b2], subject, 0, |_| false, &QuorumPolicy::default());
+        if matches!(outcome.verdict, crate::mesh::quorum::QuorumVerdict::Reached { .. }) {
+            if shadow.record(subject, &outcome, ISOLATION_TTL_MS, now).is_ok() {
+                proposals += 1;
+            }
+            // Operator duyệt (I-2 human-in-the-loop — sim chọn approve luôn)
+            // — nhưng CHỈ khi subject còn Attested/Suspect: subject bị partition
+            // stale về Unknown thì isolate là transition bất hợp lệ (đúng
+            // production approve_isolation trả Err).
+            let executable = graph
+                .node(&subject)
+                .map(|n| matches!(n.state, NodeState::Attested | NodeState::Suspect))
+                .unwrap_or(false);
+            if executable {
+                // Đúng luồng production: Attested → Suspect trước khi isolate.
+                if graph.node(&subject).map(|n| n.state == NodeState::Attested).unwrap_or(false) {
+                    let _ = graph.transition(&subject, NodeState::Suspect);
+                }
+                if decisions
+                    .record(DecisionEntry {
+                        subject,
+                        action: DecisionAction::Approve,
+                        enforcement: EnforcementMode::LogicOnly,
+                        evidence_refs: Vec::new(),
+                        decided_mono_ms: now,
+                        decided_wall_ms: now,
+                        reason: "sim".into(),
+                    })
+                    .is_ok()
+                {
+                    decided += 1;
+                }
+                if graph.isolate_with_ttl(&subject, now, ISOLATION_TTL_MS).is_ok() {
+                    isolations += 1;
+                }
+                probation.insert(subject, 3);
+            }
+        }
+
+        // ---- 3. GC định kỳ: TTL lift + stale — đúng tick_gc production.
+        //      Lifts giữa chừng phải CỘNG DỒN (không chỉ đếm tick cuối).
+        let report = graph.tick_gc(now);
+        partition_staled += report.staled_nodes as u64;
+        ttl_lifts += report.lifted_isolations as u64;
+
+        // ---- 4. Probation mô phỏng: tick sạch → Suspect → Attested.
+        let subjects: Vec<NodeId> = probation.keys().copied().collect();
+        for subject in subjects {
+            let Some(node) = graph.node(&subject) else {
+                probation.remove(&subject);
+                continue;
+            };
+            if node.state != NodeState::Suspect {
+                continue;
+            }
+            let left = probation.get_mut(&subject).map(|t| {
+                *t = t.saturating_sub(1);
+                *t
+            });
+            if left == Some(0) {
+                probation.remove(&subject);
+                let _ = graph.transition(&subject, NodeState::Attested);
+            }
+        }
+    }
+
+    // Vòng cuối: đẩy thời gian thật xa để mọi isolation còn lại hết TTL
+    // (INV-014 — reversibility; sim chứng minh không isolation vĩnh viễn).
+    let final_now = (rounds as u64).saturating_mul(STEP_MS) + ISOLATION_TTL_MS + 1;
+    let report = graph.tick_gc(final_now);
+    ttl_lifts += report.lifted_isolations as u64;
+
+    IsolationSimReport {
+        rounds,
+        nodes: graph.node_count(),
+        isolations_issued: isolations,
+        ttl_lifts,
+        proposals_created: proposals,
+        decisions_logged: decided,
+        partition_staled,
+        elapsed: start.elapsed(),
+    }
+}
+
+#[cfg(test)]
+mod sim_tests {
+    use super::*;
+
+    #[test]
+    fn isolation_sim_lifts_all_ttls_and_logs_decisions() {
+        let report = run_isolation_sim(60);
+        assert_eq!(report.nodes, crate::mesh::graph::MAX_NODES);
+        assert!(report.proposals_created > 0, "sim phải sinh đề nghị quorum");
+        assert!(report.decisions_logged > 0);
+        assert!(
+            report.decisions_logged <= report.proposals_created,
+            "chỉ đề nghị trên node còn Attested/Suspect mới được duyệt thực thi"
+        );
+        assert_eq!(
+            report.decisions_logged, report.isolations_issued,
+            "mỗi quyết định duyệt phải đúng một isolate"
+        );
+        assert!(report.isolations_issued > 0);
+        assert_eq!(
+            report.isolations_issued, report.ttl_lifts,
+            "mọi isolation phải được lift đúng TTL — không có isolation vĩnh viễn (INV-014)"
+        );
+        assert!(report.partition_staled > 0, "partition phải tạo stale node/edge");
+        assert!(report.elapsed.as_secs() < 60, "sim phải hoàn thành nhanh");
     }
 }

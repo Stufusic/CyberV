@@ -5,9 +5,11 @@
 //! (NSG Event Model), quorum independence có trọng số (TrustScore 5 chiều),
 //! epoch + partition/merge consistency.
 //!
-//! Ranh giới trung thực (INV-007): tầng này **chưa có I/O mạng** — khi NSG-2
-//! hiện thực kênh truyền, mọi frame bắt buộc đi qua phiên AEAD + chữ ký
-//! identity (INV-012 planned); không có đường nào nâng trust từ "ping được".
+//! Ranh giới trung thực (INV-007): tầng pure logic (graph/quorum/events/shadow)
+//! **không có I/O mạng**. Từ NSG-2 (M-PLAN M-1), kênh truyền thật hiện thực ở
+//! `transport/` + `node.rs`: mọi frame bắt buộc đi qua bắt tay 3 bước + phiên
+//! AEAD + chữ ký identity (INV-012); peer chưa pin neo enrollment bị từ chối;
+//! không có đường nào nâng trust từ "ping được".
 //! Các ngưỡng policy hiện là `Default` placeholder — khi NSG-3 chuyển sang
 //! signed policy sẽ tái dụng kênh INV-011 và giá trị mặc định chỉ là sở khởi.
 
@@ -15,14 +17,18 @@ pub mod consistency;
 pub mod correlation;
 pub mod discovery;
 pub mod events;
-pub mod graph;
 pub mod gossip;
+pub mod graph;
+pub mod isolation;
+pub mod node;
 pub mod pipe_session;
 pub mod quorum;
 pub mod reputation;
 pub mod session;
 pub mod shadow;
 pub mod sim;
+pub mod transport;
+pub mod wfp;
 
 use thiserror::Error;
 
@@ -62,4 +68,16 @@ pub enum MeshError {
 
     #[error("Phiên bản wire mesh không hỗ trợ: {0}")]
     UnsupportedVersion(u32),
+
+    #[error("I/O transport mesh: {0}")]
+    TransportIo(String),
+
+    #[error("Liên kết mesh đã đóng: {0}")]
+    LinkClosed(String),
+
+    #[error("Peer chưa có neo pinning enrollment: {0}")]
+    UnknownPeer(String),
+
+    #[error("Endpoint transport không hợp lệ: {0}")]
+    InvalidEndpoint(String),
 }

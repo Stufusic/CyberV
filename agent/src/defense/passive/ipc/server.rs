@@ -48,6 +48,9 @@ pub mod win_server {
         /// Khóa identity để ký handshake pipe (P1-1). `None` = fail-closed:
         /// mọi kết nối chỉ nhận ERR rồi bị đóng — không có phiên plaintext.
         identity_key: Option<crate::identity::keypair::DeviceIdentityKey>,
+        /// I-2: node mesh đã wire (nếu daemon chạy mesh). `None` = Isolation
+        /// Inbox/Decision trả fail-closed — không giả vờ có engine.
+        mesh_node: Option<SharedMeshNode>,
     }
 
     impl NamedPipeServer {
@@ -58,6 +61,7 @@ pub mod win_server {
                 allowed_client_pids: None,
                 status_snapshot: None,
                 identity_key: None,
+                mesh_node: None,
             }
         }
 
@@ -85,6 +89,13 @@ pub mod win_server {
         /// từ kernel — không tin PID do client tự khai trong envelope).
         pub fn with_allowed_client_pids(mut self, pids: Vec<u32>) -> Self {
             self.allowed_client_pids = Some(pids);
+            self
+        }
+
+        /// I-2: gắn node mesh — Isolation Inbox/Decision sẽ thao tác THẬT trên
+        /// node này. Không gắn = trả fail-closed (không giả vờ có mesh).
+        pub fn with_mesh_node(mut self, node: SharedMeshNode) -> Self {
+            self.mesh_node = Some(node);
             self
         }
 
@@ -150,6 +161,7 @@ pub mod win_server {
                 let allowed_pids = self.allowed_client_pids.clone();
                 let status_snap = self.status_snapshot.clone();
                 let identity_key = self.identity_key.clone();
+                let mesh_node = self.mesh_node.clone();
                 tokio::spawn(async move {
                     let client_pid = Self::query_client_pid(&server);
                     if let (Some(pids), Some(cp)) = (&allowed_pids, client_pid) {
@@ -244,8 +256,11 @@ pub mod win_server {
                                 return;
                             }
                         };
-                        let mut resp =
-                            handle_ipc_message_with(&payload, status_snap.as_ref());
+                        let mut resp = handle_ipc_message_with(
+                            &payload,
+                            status_snap.as_ref(),
+                            mesh_node.as_ref(),
+                        );
                         // Đính kèm PID client do KERNEL xác nhận — PID tự khai
                         // trong envelope không đáng tin.
                         if let Some(data) = resp.data.as_mut() {
@@ -340,12 +355,13 @@ pub mod win_server {
     /// Wrapper không-snapshot (dùng cho test + tương thích call-site cũ)
     #[allow(dead_code)]
     pub(crate) fn handle_ipc_message(raw_bytes: &[u8]) -> IpcResponsePayload {
-        handle_ipc_message_with(raw_bytes, None)
+        handle_ipc_message_with(raw_bytes, None, None)
     }
 
-    fn handle_ipc_message_with(
+    pub(crate) fn handle_ipc_message_with(
         raw_bytes: &[u8],
         status_snapshot: Option<&crate::daemon_runner::SharedAgentStatus>,
+        mesh_node: Option<&SharedMeshNode>,
     ) -> IpcResponsePayload {
         let envelope = match IpcProtocolValidator::parse_and_validate(raw_bytes) {
             Ok(env) => env,
@@ -462,6 +478,170 @@ pub mod win_server {
                 error: None,
                 timestamp: now,
             },
+            IpcCommand::IsolationInbox => {
+                let Some(node) = mesh_node else {
+                    return IpcResponsePayload {
+                        message_id: envelope.message_id,
+                        success: false,
+                        data: Some(serde_json::json!({
+                            "reason": "mesh engine not wired in this build (fail-closed)"
+                        })),
+                        error: Some("Isolation Inbox unavailable (fail-closed)".into()),
+                        timestamp: now,
+                    };
+                };
+                block_on_mesh(async {
+                    let node = node.lock().await;
+                    let proposals = node.pending_isolation_proposals().await;
+                    let mode = node.enforcement_mode().await;
+                    let items: Vec<serde_json::Value> = proposals
+                        .iter()
+                        .map(|p| {
+                            serde_json::json!({
+                                "subject_hex": to_hex(&p.subject),
+                                "total_weight": p.total_weight,
+                                "evidence_refs": p
+                                    .accepted_event_ids
+                                    .iter()
+                                    .map(|id| to_hex(id))
+                                    .collect::<Vec<_>>(),
+                                "proposed_mono_ms": p.proposed_mono_ms,
+                                "ttl_ms": p.ttl_ms,
+                            })
+                        })
+                        .collect();
+                    IpcResponsePayload {
+                        message_id: envelope.message_id,
+                        success: true,
+                        data: Some(serde_json::json!({
+                            "enforcement": mode.as_str(),
+                            "proposals": items,
+                        })),
+                        error: None,
+                        timestamp: now,
+                    }
+                })
+            }
+            IpcCommand::IsolationDecision { subject_hex, action, reason } => {
+                // Bounds fail-closed: subject phải là 64 hex; action whitelist;
+                // reason ≤ 200 ký tự (đối xứng MAX_REASON_LEN của DecisionLog).
+                let Some(node) = mesh_node else {
+                    return IpcResponsePayload {
+                        message_id: envelope.message_id,
+                        success: false,
+                        data: None,
+                        error: Some("Mesh engine not wired in this build (fail-closed)".into()),
+                        timestamp: now,
+                    };
+                };
+                let Some(subject) = decode_node_id(&subject_hex) else {
+                    return IpcResponsePayload {
+                        message_id: envelope.message_id,
+                        success: false,
+                        data: None,
+                        error: Some("subject_hex phải là 64 ký tự hex".into()),
+                        timestamp: now,
+                    };
+                };
+                if reason.chars().count() > crate::mesh::isolation::MAX_REASON_LEN {
+                    return IpcResponsePayload {
+                        message_id: envelope.message_id,
+                        success: false,
+                        data: None,
+                        error: Some(format!(
+                            "reason vượt {} ký tự",
+                            crate::mesh::isolation::MAX_REASON_LEN
+                        )),
+                        timestamp: now,
+                    };
+                }
+                match action.as_str() {
+                    "approve" => {
+                        let resp = block_on_mesh(async move {
+                            let node = node.lock().await;
+                            node.approve_isolation(subject, &reason).await
+                        });
+                        match resp {
+                            Ok(mode) => IpcResponsePayload {
+                                message_id: envelope.message_id,
+                                success: true,
+                                data: Some(serde_json::json!({
+                                    "action": "approve",
+                                    "enforcement": mode.as_str(),
+                                    "subject_hex": subject_hex,
+                                })),
+                                error: None,
+                                timestamp: now,
+                            },
+                            Err(e) => IpcResponsePayload {
+                                message_id: envelope.message_id,
+                                success: false,
+                                data: None,
+                                error: Some(format!("approve thất bại: {e}")),
+                                timestamp: now,
+                            },
+                        }
+                    }
+                    "lift" => {
+                        let resp = block_on_mesh(async move {
+                            let node = node.lock().await;
+                            node.lift_isolation(subject, &reason).await
+                        });
+                        match resp {
+                            Ok(()) => IpcResponsePayload {
+                                message_id: envelope.message_id,
+                                success: true,
+                                data: Some(serde_json::json!({
+                                    "action": "lift",
+                                    "state": "SUSPECT_PROBATION",
+                                    "subject_hex": subject_hex,
+                                })),
+                                error: None,
+                                timestamp: now,
+                            },
+                            Err(e) => IpcResponsePayload {
+                                message_id: envelope.message_id,
+                                success: false,
+                                data: None,
+                                error: Some(format!("lift thất bại: {e}")),
+                                timestamp: now,
+                            },
+                        }
+                    }
+                    "reject" => {
+                        let resp = block_on_mesh(async move {
+                            let node = node.lock().await;
+                            node.reject_isolation(subject, &reason).await
+                        });
+                        match resp {
+                            Ok(()) => IpcResponsePayload {
+                                message_id: envelope.message_id,
+                                success: true,
+                                data: Some(serde_json::json!({
+                                    "action": "reject",
+                                    "subject_hex": subject_hex,
+                                })),
+                                error: None,
+                                timestamp: now,
+                            },
+                            Err(e) => IpcResponsePayload {
+                                message_id: envelope.message_id,
+                                success: false,
+                                data: None,
+                                error: Some(format!("reject thất bại: {e}")),
+                                timestamp: now,
+                            },
+                        }
+                    }
+                    other => IpcResponsePayload {
+                        message_id: envelope.message_id,
+                        success: false,
+                        data: None,
+                        error: Some(format!("action không hợp lệ: {other}")),
+                        timestamp: now,
+                    },
+                }
+            }
             IpcCommand::EmergencyAlert { alert_reason } => IpcResponsePayload {
                 message_id: envelope.message_id,
                 success: true,
@@ -474,6 +654,181 @@ pub mod win_server {
                 timestamp: now,
             },
         }
+    }
+}
+
+/// Handle chia sẻ tới node mesh đã wire vào server (I-2).
+pub type SharedMeshNode = std::sync::Arc<tokio::sync::Mutex<crate::mesh::node::MeshNode>>;
+
+/// Chạy future mesh đến cùng — an toàn cả trong lẫn ngoài tokio runtime:
+/// trong runtime → scoped thread ngoài context (block_on cấm trên worker);
+/// ngoài runtime → runtime current_thread dùng chung (lười khởi tạo).
+fn block_on_mesh<F>(fut: F) -> F::Output
+where
+    F: std::future::Future + Send,
+    F::Output: Send,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            std::thread::scope(|scope| {
+                scope
+                    .spawn(|| handle.block_on(fut))
+                    .join()
+                    .expect("mesh future panic")
+            })
+        }
+        Err(_) => {
+            static RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+            RT.get_or_init(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("mesh runtime")
+            })
+            .block_on(fut)
+        }
+    }
+}
+
+/// Encode hex thường (output) — dữ liệu nội bộ, không phải input ngoài.
+fn to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Decode NodeId từ hex — qua helper an toàn byte của dự án (bounds + ký tự).
+fn decode_node_id(hex_str: &str) -> Option<[u8; 32]> {
+    let decoded = crate::defense::passive::isolation::admission::decode_hex(hex_str).ok()?;
+    if decoded.len() != 32 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&decoded);
+    Some(out)
+}
+
+#[cfg(test)]
+mod isolation_ipc_tests {
+    use super::super::protocol::IpcMessageEnvelope;
+    use super::win_server::handle_ipc_message_with;
+    use super::*;
+
+
+    /// Node mesh test — KHÔNG start() listener (chỉ cần desk + core state).
+    fn test_mesh_node() -> SharedMeshNode {
+        use crate::identity::keypair::DeviceIdentityKey;
+        use crate::identity::rng::OsCryptoRng;
+        let key = DeviceIdentityKey::generate(&mut OsCryptoRng).unwrap();
+        std::sync::Arc::new(tokio::sync::Mutex::new(
+            crate::mesh::node::MeshNode::new(
+                key,
+                std::collections::HashMap::new(),
+                Default::default(),
+            ),
+        ))
+    }
+
+    fn envelope_of(command: IpcCommand) -> Vec<u8> {
+        let envelope = IpcMessageEnvelope {
+            message_id: "t-1".into(),
+            command,
+            sender_pid: 4242,
+            timestamp: 1_000,
+        };
+        serde_json::to_vec(&envelope).unwrap()
+    }
+
+    fn resp_data(raw: &[u8], mesh: Option<&SharedMeshNode>) -> IpcResponsePayload {
+        handle_ipc_message_with(raw, None, mesh)
+    }
+
+
+    #[test]
+    fn inbox_without_mesh_is_fail_closed() {
+        let resp = resp_data(&envelope_of(IpcCommand::IsolationInbox), None);
+        assert!(!resp.success);
+        assert!(resp.error.unwrap_or_default().contains("fail-closed"));
+    }
+
+    #[test]
+    fn inbox_with_mesh_reports_enforcement_honestly() {
+        let node = test_mesh_node();
+        let resp = resp_data(&envelope_of(IpcCommand::IsolationInbox), Some(&node));
+        assert!(resp.success);
+        let data = resp.data.unwrap();
+        assert_eq!(data["proposals"].as_array().unwrap().len(), 0);
+        // Mode phải là một trong ba giá trị trung thực — không bao giờ "WFP" giả
+        // khi máy không elevated.
+        let mode = data["enforcement"].as_str().unwrap();
+        assert!(["WFP", "LOGIC_ONLY", "NOT_EXECUTED"].contains(&mode), "mode lạ: {mode}");
+    }
+
+    #[test]
+    fn decision_bounds_are_fail_closed() {
+        let node = test_mesh_node();
+
+        // Hex sai
+        let resp = resp_data(
+            &envelope_of(IpcCommand::IsolationDecision {
+                subject_hex: "zz".into(),
+                action: "approve".into(),
+                reason: "x".into(),
+            }),
+            Some(&node),
+        );
+        assert!(!resp.success);
+        assert!(resp.error.unwrap_or_default().contains("hex"));
+
+        // Lý do vượt 200 ký tự
+        let resp = resp_data(
+            &envelope_of(IpcCommand::IsolationDecision {
+                subject_hex: "ab".repeat(32),
+                action: "approve".into(),
+                reason: "r".repeat(201),
+            }),
+            Some(&node),
+        );
+        assert!(!resp.success);
+        assert!(resp.error.unwrap_or_default().contains("200"));
+
+        // Action lạ
+        let resp = resp_data(
+            &envelope_of(IpcCommand::IsolationDecision {
+                subject_hex: "ab".repeat(32),
+                action: "nuke".into(),
+                reason: "r".into(),
+            }),
+            Some(&node),
+        );
+        assert!(!resp.success);
+        assert!(resp.error.unwrap_or_default().contains("action"));
+    }
+
+    #[test]
+    fn reject_records_decision_and_clears_proposal_visibility() {
+        let node = test_mesh_node();
+        // reject không cần đề nghị đang chờ — chỉ ghi audit.
+        let resp = resp_data(
+            &envelope_of(IpcCommand::IsolationDecision {
+                subject_hex: "cd".repeat(32),
+                action: "reject".into(),
+                reason: "không đủ căn cứ".into(),
+            }),
+            Some(&node),
+        );
+        assert!(resp.success, "reject phải thành công: {:?}", resp.error);
+        assert_eq!(resp.data.as_ref().unwrap()["action"], "reject");
+
+        // Approve KHÔNG có đề nghị → từ chối rõ ràng (không isolate tay).
+        let resp = resp_data(
+            &envelope_of(IpcCommand::IsolationDecision {
+                subject_hex: "ab".repeat(32),
+                action: "approve".into(),
+                reason: "thử isolate tay".into(),
+            }),
+            Some(&node),
+        );
+        assert!(!resp.success);
+        assert!(resp.error.unwrap_or_default().contains("đề nghị"));
     }
 }
 

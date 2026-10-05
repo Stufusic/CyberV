@@ -67,6 +67,10 @@ fn transition_allowed(from: NodeState, to: NodeState) -> bool {
         (from, to),
         (Unknown, Discovered)
             | (Discovered, Attested)
+            // Probation sau cách ly (M-PLAN §6.3): node re-attest sau
+            // isolation phải đi qua Suspect, K tick sạch mới lên Attested.
+            // Chiều xấu-hơn nên không phá fail-closed.
+            | (Discovered, Suspect)
             | (Discovered, Unknown) // stale
             | (Attested, Suspect)
             | (Attested, Unknown) // mất kết nối
@@ -350,6 +354,10 @@ mod tests {
         assert!(!transition_allowed(NodeState::Unknown, NodeState::Suspect));
         assert!(!transition_allowed(NodeState::Unknown, NodeState::Isolated));
         assert!(!transition_allowed(NodeState::Discovered, NodeState::Isolated));
+        // Probation sau cách ly (M-PLAN §6.3): Discovered → Suspect được phép
+        // (chiều xấu-hơn); node probation KHÔNG được nhảy thẳng Attested qua
+        // đường engine (engine tự kiểm trước khi gọi transition Attested).
+        assert!(transition_allowed(NodeState::Discovered, NodeState::Suspect));
         // Isolated có ĐÚNG MỘT đường hạ xuống: merge reconcile phát hiện
         // mâu thuẫn → Suspect (plan §6.2b). Không đường nào khác.
         assert!(transition_allowed(NodeState::Isolated, NodeState::Suspect));

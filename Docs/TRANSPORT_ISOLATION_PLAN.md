@@ -179,3 +179,38 @@ duyệt" sớm nhất mà an toàn) → M-3 → M-4 → I-3.
   cách ly chỉ chặn traffic giữa node CyberV với peer bị tố, không phải firewall
   toàn hệ thống.
 - Auto-pilot (I-3) vẫn bị chặn bởi freeze gate — plan này KHÔNG mở nó sớm.
+
+---
+
+## 10. Trạng thái triển khai (cập nhật 2026-10-05)
+
+> **EN: Implementation status after the first M-PLAN execution pass — what is
+> wired, test provenance per phase, and what remains (M-3/M-4/I-3).**
+
+| Phase | Trạng thái | Code | Test chứng minh |
+|---|---|---|---|
+| **M-1** Transport trait + TCP-LAN + path_class | ✅ Đã wire | `mesh/transport/{mod,tcp}.rs`, `mesh/node.rs` | `mesh_transport_tests.rs`: 2 node trao đổi gossip qua TCP loopback thật; 2 vote cùng path_class đếm 1 (tầng quorum + tầng engine); disconnect → edge Stale, node không rớt graph; frame hỏng AEAD đếm fault, link sống dưới trần; peer chưa pin bị từ chối; cap link/peer từ chối rõ ràng |
+| **M-2** mDNS discovery | ✅ Đã wire | `mesh/transport/mdns.rs` (mdns-sd 0.21 — rationale Phụ lục B plan NSG) | `mesh_mdns_tests.rs`: 2 node TỰ tìm thấy + attest không cấu hình tay; beacon lệch node_id ≠ vk bị từ chối + đếm |
+| **I-1** Self-isolation | ✅ Đã wire | `EventKind::IsolationAlert`, `MeshNode::self_isolate` | `mesh_isolation_tests.rs`: tamper → tự isolate → alert ký → peer hạ Isolated + cắt link; alert mượn tên đòi isolate người khác bị bỏ qua; hết TTL mở lại inbound (INV-014) |
+| **I-2** WFP + Isolation Desk + UI Inbox | ✅ Đã wire (chờ verify admin thật) | `mesh/wfp.rs`, `mesh/isolation.rs`, IPC `IsolationInbox`/`IsolationDecision`, UI `isolation_page.py` | `mesh_isolation_desk_tests.rs`: quorum 2 đường thật (loopback + LAN) → đề nghị → operator duyệt → thực thi (loopback → LogicOnly trung thực) → probation Suspect → 3 tick sạch → Attested; unit test WFP marker/deadline + AccessDenied mapping; test admin block/unblock/sweep để `#[ignore]` — chạy tay khi elevated |
+| **mesh-sim** isolation simulator | ✅ Đã wire | `mesh/sim.rs::run_isolation_sim` | 256 node + partition/merge + quorum/decide/isolate/TTL-lift; bất biến: isolations == lifts (không isolation vĩnh viễn, INV-014) |
+| **M-3** WiFi Direct shim | ⏳ Chưa làm | — | Close: 2 máy bắt tay WFD + fault ngắt carrier recover |
+| **M-4** BLE beacon | ⏳ Chưa làm | — | Close: BLE presence không đổi NodeState |
+| **I-3** Auto-pilot | ⛔ CHỦ Ý KHÔNG MỞ | — | Freeze gate Trụ 1 + D2.3 + wrong-action rate benign set — giữ nguyên gate v2 |
+
+Ghi chú trung thực bổ sung khi triển khai:
+
+- **path_class dùng scope/24 IPv4 (loopback gộp một scope)** — hệ quả chủ ý:
+  mesh phẳng MỘT subnet + MỘT transport không tự đủ quorum (2 vote cùng
+  segment đếm 1). Quorum cần đa dạng đường (khác transport hoặc khác segment)
+  — test I-2 dùng loopback + LAN IP thật để tạo hai đường.
+- **Pin neo từ beacon là first-contact (TOFU)**: NodeId ≡ vk theo thiết kế
+  nên beacon giả tạo được node mới nhưng KHÔNG thể mạo danh node có sẵn;
+  node mới bị cap cold-start (weight thấp) — quorum vẫn chặn. Enrollment
+  thủ công vẫn là đường mạnh hơn.
+- **WFP loopback guard**: rule không bao giờ thêm cho loopback (plan §9) —
+  approve isolation trên peer loopback trả `LOGIC_ONLY` trung thực thay vì
+  giả vờ chặn.
+- **ShadowLedger giữ bất biến `executed == false` vĩnh viễn** — quyết định
+  thực thi của operator nằm ở `DecisionLog` (bounded 256, evidence refs =
+  event_id phiếu), không đụng sổ shadow.

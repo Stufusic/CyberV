@@ -35,6 +35,10 @@ pub enum EventKind {
     EpochMarker,
     /// Sự kiện khôi phục có chữ ký authority (INV-014).
     Recovery,
+    /// I-1: node tự tố CÓ CHỮ KÝ CỦA CHÍNH NÓ — subject ≡ origin. Peer nhận
+    /// được chỉ hành động theo hướng XẤU NHẤT (hạ subject về Isolated) —
+    /// không bao giờ là đường nâng trust.
+    IsolationAlert,
 }
 
 impl EventKind {
@@ -45,6 +49,7 @@ impl EventKind {
             EventKind::Heartbeat => 3,
             EventKind::EpochMarker => 4,
             EventKind::Recovery => 5,
+            EventKind::IsolationAlert => 6,
         }
     }
 
@@ -55,6 +60,7 @@ impl EventKind {
             3 => Some(EventKind::Heartbeat),
             4 => Some(EventKind::EpochMarker),
             5 => Some(EventKind::Recovery),
+            6 => Some(EventKind::IsolationAlert),
             _ => None,
         }
     }
@@ -235,6 +241,146 @@ impl NsgEvent {
     /// Thời hạn còn hiệu lực cho quyết định (điều tra vẫn dùng được sau đó).
     pub fn is_decision_fresh(&self, now_wall_ms: u64) -> bool {
         now_wall_ms < self.expiry_wall_ms
+    }
+
+    /// Wire gossip (NSG-2b): `canonical_bytes() || signature(64)`. `event_id`
+    /// KHÔNG đi trên dây — bên nhận tự tính lại từ canonical, không tin định
+    /// danh tự khai (EventLog.accept ràng buộc id ↔ nội dung khi nhận).
+    pub fn to_wire(&self) -> Vec<u8> {
+        let mut out = self.canonical_bytes();
+        out.extend_from_slice(&self.signature);
+        out
+    }
+
+    /// Giải mã wire event — bounds nghiêm ngặt, mọi cấu trúc lệch là `Err`
+    /// (frame rác không bao giờ tạo event nửa vời).
+    pub fn from_wire(bytes: &[u8]) -> Result<Self, MeshError> {
+        const SIG_LEN: usize = 64;
+        if bytes.len() < SIG_LEN {
+            return Err(MeshError::Frame("wire event thiếu signature".into()));
+        }
+        let split = bytes.len() - SIG_LEN;
+        let canonical = &bytes[..split];
+        let mut signature = [0u8; SIG_LEN];
+        signature.copy_from_slice(&bytes[split..]);
+
+        let mut pos = 0usize;
+        let mut take = |n: usize, what: &str| -> Result<&[u8], MeshError> {
+            let end = pos
+                .checked_add(n)
+                .ok_or_else(|| MeshError::Frame("tràn khi parse event wire".into()))?;
+            if canonical.len() < end {
+                return Err(MeshError::Frame(format!("wire event cắt cụt ở {what}")));
+            }
+            let chunk = &canonical[pos..end];
+            pos = end;
+            Ok(chunk)
+        };
+        let fixed = |bytes: &[u8], what: &str| -> Result<[u8; 8], MeshError> {
+            bytes
+                .try_into()
+                .map_err(|_| MeshError::Frame(format!("{what} cắt cụt")))
+        };
+
+        let domain_len = DOMAIN_MESH_EVENT.len();
+        if take(domain_len, "domain")? != DOMAIN_MESH_EVENT {
+            return Err(MeshError::Frame("domain event wire sai".into()));
+        }
+        if take(1, "separator")? != [0x00] {
+            return Err(MeshError::Frame("separator event wire sai".into()));
+        }
+        let version_bytes = take(4, "version")?;
+        let version = u32::from_be_bytes(version_bytes.try_into().map_err(|_| {
+            MeshError::Frame("version event cắt cụt".into())
+        })?);
+        if version != MESH_EVENT_VERSION {
+            return Err(MeshError::UnsupportedVersion(version));
+        }
+        if take(1, "separator")? != [0x00] {
+            return Err(MeshError::Frame("separator event wire sai".into()));
+        }
+        let kind = EventKind::from_u8(take(1, "kind")?[0])
+            .ok_or_else(|| MeshError::Frame("kind event wire lạ".into()))?;
+        if take(1, "separator")? != [0x00] {
+            return Err(MeshError::Frame("separator event wire sai".into()));
+        }
+        let signal_class = match take(1, "signal_class")?[0] {
+            0 => None,
+            v => Some(SignalClass::from_u8(v).ok_or_else(|| {
+                MeshError::Frame("signal_class event wire lạ".into())
+            })?),
+        };
+        if take(1, "separator")? != [0x00] {
+            return Err(MeshError::Frame("separator event wire sai".into()));
+        }
+        let origin_id = take(32, "origin_id")?
+            .try_into()
+            .map_err(|_| MeshError::Frame("origin_id cắt cụt".into()))?;
+        let origin_seq = u64::from_be_bytes(fixed(take(8, "origin_seq")?, "origin_seq")?);
+        let epoch = u64::from_be_bytes(fixed(take(8, "epoch")?, "epoch")?);
+        let created_wall_ms = u64::from_be_bytes(fixed(take(8, "created_wall_ms")?, "created_wall_ms")?);
+        let expiry_wall_ms = u64::from_be_bytes(fixed(take(8, "expiry_wall_ms")?, "expiry_wall_ms")?);
+
+        let subject = match take(1, "subject marker")? {
+            [0x00] => None,
+            [0x01] => Some(
+                take(32, "subject")?
+                    .try_into()
+                    .map_err(|_| MeshError::Frame("subject cắt cụt".into()))?,
+            ),
+            _ => return Err(MeshError::Frame("subject marker wire sai".into())),
+        };
+        let evidence_root = match take(1, "evidence marker")? {
+            [0x00] => None,
+            [0x01] => Some(
+                take(32, "evidence_root")?
+                    .try_into()
+                    .map_err(|_| MeshError::Frame("evidence_root cắt cụt".into()))?,
+            ),
+            _ => return Err(MeshError::Frame("evidence marker wire sai".into())),
+        };
+        let obs_channel = match take(1, "obs_channel")?[0] {
+            0 => None,
+            v => Some(ObsChannel::from_u8(v).ok_or_else(|| {
+                MeshError::Frame("obs_channel event wire lạ".into())
+            })?),
+        };
+
+        let parents_len = u32::from_be_bytes(
+            take(4, "parents_len")?
+                .try_into()
+                .map_err(|_| MeshError::Frame("parents_len cắt cụt".into()))?,
+        ) as usize;
+        let parents_bytes = parents_len
+            .checked_mul(32)
+            .ok_or_else(|| MeshError::Frame("tràn số parent event wire".into()))?;
+        let parents_blob = take(parents_bytes, "parents")?;
+        // as_chunks: slice 32-byte cố định — sai bội tự thành phần lẻ lỗi.
+        let (chunks, remainder) = parents_blob.as_chunks::<32>();
+        if !remainder.is_empty() {
+            return Err(MeshError::Frame("parent cắt cụt".into()));
+        }
+        let mut causal_parents = Vec::with_capacity(parents_len.min(64));
+        causal_parents.extend_from_slice(chunks);
+        if pos != canonical.len() {
+            return Err(MeshError::Frame("wire event dư byte sau canonical".into()));
+        }
+
+        Ok(Self {
+            event_id: Self::compute_event_id(canonical),
+            origin_id,
+            origin_seq,
+            epoch,
+            causal_parents,
+            evidence_root,
+            created_wall_ms,
+            expiry_wall_ms,
+            kind,
+            signal_class,
+            subject,
+            obs_channel,
+            signature,
+        })
     }
 }
 
@@ -498,5 +644,65 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, MeshError::LimitExceeded { kind: "event", dropped: 1 }));
         assert_eq!(log.dropped_count(), 1);
+    }
+
+    #[test]
+    fn wire_roundtrip_preserves_event_through_log() {
+        let key = make_key();
+        let ev = unsigned_vote(&key, 7, [0x44; 32]);
+        let wire = ev.to_wire();
+        let decoded = NsgEvent::from_wire(&wire).unwrap();
+        assert_eq!(decoded, ev);
+        // Event đi qua wire phải vào được log (verify lại toàn bộ từ đầu).
+        let mut log = EventLog::new(16);
+        assert_eq!(
+            log.accept(decoded, key.verifying_key(), 2_000, 0).unwrap(),
+            AcceptOutcome::Accepted
+        );
+    }
+
+    #[test]
+    fn wire_rejects_truncated_and_trailing() {
+        let key = make_key();
+        let wire = unsigned_vote(&key, 1, [0x44; 32]).to_wire();
+        assert!(NsgEvent::from_wire(&wire[..wire.len() - 1]).is_err());
+        let mut extra = wire.clone();
+        extra.push(0x00);
+        assert!(NsgEvent::from_wire(&extra).is_err());
+        assert!(NsgEvent::from_wire(&wire[..10]).is_err());
+        assert!(NsgEvent::from_wire(&[]).is_err());
+    }
+
+    #[test]
+    fn wire_rejects_wrong_domain_and_version() {
+        let key = make_key();
+        let mut wire = unsigned_vote(&key, 1, [0x44; 32]).to_wire();
+        wire[0] = b'X'; // đụng domain
+        assert!(NsgEvent::from_wire(&wire).is_err());
+        // Canonical: domain(20) + 0x00 + version(4) → version ở offset 21..25.
+        let mut wire2 = unsigned_vote(&key, 2, [0x44; 32]).to_wire();
+        let v_off = DOMAIN_MESH_EVENT.len() + 1;
+        wire2[v_off..v_off + 4].copy_from_slice(&99u32.to_be_bytes());
+        assert!(matches!(
+            NsgEvent::from_wire(&wire2),
+            Err(MeshError::UnsupportedVersion(99))
+        ));
+    }
+
+    #[test]
+    fn wire_tampering_breaks_log_accept_not_from_wire() {
+        // Sửa NỘI DUNG sau khi ký (byte trong origin_id — không đụng cấu trúc):
+        // from_wire tự tính event_id mới (không tin định danh trên dây) nhưng
+        // chữ ký vỡ — EventLog phải từ chối.
+        let key = make_key();
+        let mut wire = unsigned_vote(&key, 1, [0x44; 32]).to_wire();
+        let origin_byte = DOMAIN_MESH_EVENT.len() + 1 + 4 + 1 + 1 + 1 + 1 + 1 + 1 + 5;
+        wire[origin_byte] ^= 0x01;
+        let decoded = NsgEvent::from_wire(&wire).unwrap();
+        let mut log = EventLog::new(16);
+        let err = log
+            .accept(decoded, key.verifying_key(), 2_000, 0)
+            .unwrap_err();
+        assert!(matches!(err, MeshError::EventRejected(_)));
     }
 }

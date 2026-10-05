@@ -653,6 +653,12 @@ nhân quả trực tiếp && không cùng causal parent && path khác.
 | `x25519-dalek` | 2 (features: static_secrets, zeroize) | Đúng crate PHASE1_2 plan P1-1 chỉ định; RustCrypto chính chủ, pure-Rust; ephemeral secret zeroize-on-drop đúng INV-008 |
 | `chacha20poly1305` | 0.10 (default-features off, chỉ alloc) | Đúng crate P1-1 chỉ định; AEAD RFC 8439 cho frame phiên mesh + IPC sau này |
 
+**Thêm 2026-10-05, phục vụ M-PLAN M-2 (mDNS discovery, NSG-2b):**
+
+| Crate | Version | Lý do |
+|---|---|---|
+| `mdns-sd` | 0.21 | Crate **duy nhất** của M-series. Pure-Rust, không phụ thuộc async runtime (flume), đúng vai trò discovery Tier A (plan §10: "mDNS discovery + TCP"). Beacon đi qua TXT dạng hex — decode bounds nghiêm ngặt; peer qua mDNS chỉ vào `Discovered` (presence ≠ trust, INV-012); attest phải qua bắt tay chữ ký thật. Không crate BLE/WiFi-Direct nào được thêm ở giai đoạn này — M-3 dùng shim C++ có sẵn, M-4 quyết định thư viện tại lúc làm |
+
 Trung thực: `cargo-machete`/`cargo-deny` **chưa cài trên máy dev** — không
 chạy được local; job CI dependency-check phải xanh trước merge. Rationale ghi
 tại đây theo đúng cấm danh sách #6.

@@ -181,7 +181,7 @@ mod tests {
             obs_channel: ObsChannel::Kernel,
             evidence_root: [0xA1; 32],
             causal_parents: vec![],
-            arrival_path: 1,
+            path_class: 1,
             weight: 1000,
         };
         let b2 = Ballot {
@@ -193,7 +193,7 @@ mod tests {
             obs_channel: ObsChannel::FilesystemAcl,
             evidence_root: [0xA2; 32],
             causal_parents: vec![],
-            arrival_path: 2,
+            path_class: 2,
             weight: 1000,
         };
         crate::mesh::quorum::evaluate_quorum(&[b1, b2], nid(0xEE), 0, |_| false, &QuorumPolicy::default())

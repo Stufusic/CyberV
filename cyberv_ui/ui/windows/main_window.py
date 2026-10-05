@@ -24,6 +24,7 @@ from ..pages import (
     DiagnosticsPage,
     SettingsPage,
     AboutPage,
+    IsolationPage,
 )
 
 
@@ -90,7 +91,8 @@ class MainWindow(QMainWindow):
             ("🔑 Recovery", 4),
             ("🔬 Diagnostics", 5),
             ("⚙️ Settings", 6),
-            ("ℹ️ About", 7),
+            ("🚧 Isolation", 7),
+            ("ℹ️ About", 8),
         ]
 
         for label, page_idx in nav_items:
@@ -147,6 +149,7 @@ class MainWindow(QMainWindow):
         self.page_recovery = RecoveryPage(recovery_vm, self.stack)
         self.page_diagnostics = DiagnosticsPage(diagnostics_vm, self.stack)
         self.page_settings = SettingsPage(self.stack)
+        self.page_isolation = IsolationPage(parent=self.stack)
         self.page_about = AboutPage(self.stack)
 
         self.stack.addWidget(self.page_dashboard)    # 0
@@ -156,7 +159,8 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.page_recovery)     # 4
         self.stack.addWidget(self.page_diagnostics)  # 5
         self.stack.addWidget(self.page_settings)     # 6
-        self.stack.addWidget(self.page_about)        # 7
+        self.stack.addWidget(self.page_isolation)    # 7
+        self.stack.addWidget(self.page_about)        # 8
 
         content_layout.addWidget(self.stack)
         root_layout.addWidget(content_area, stretch=1)

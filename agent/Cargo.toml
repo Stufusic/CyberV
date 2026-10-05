@@ -33,6 +33,11 @@ serde_json = { version = "1.0", features = ["preserve_order"] }
 # Async runtime & Networking
 tokio = { version = "1.37", features = ["full"] }
 reqwest = { version = "0.12", features = ["json"] }
+# mDNS discovery NSG-2b (M-PLAN M-2) — rationale dependency (Phụ lục B plan
+# NSG): pure-Rust, không async runtime, duy nhất 1 crate mới của M-series.
+# Vai trò: quảng bá/discovery beacon Tier A (mDNS + TCP); không mang frame
+# trust — peer chỉ vào Discovered, attest phải qua bắt tay chữ ký thật.
+mdns-sd = "0.21"
 
 # Windows Hardware collector
 sysinfo = "0.30"
@@ -48,10 +53,12 @@ windows-sys = { version = "0.52", features = [
     "Win32_System_Memory",
     "Win32_System_Registry",
     "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_WindowsFilteringPlatform",
     "Win32_Networking_WinSock",
     "Win32_System_Pipes",
     "Win32_System_Services",
     "Win32_System_Threading",
+    "Win32_System_Rpc",
     "Win32_System_TpmBaseServices",
 ] }
 

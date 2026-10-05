@@ -14,6 +14,13 @@ pub enum IpcCommand {
     AttestationChallenge { nonce_hex: String },
     HeartbeatPing { timestamp: u64 },
     EmergencyAlert { alert_reason: String },
+    /// I-2: truy vấn Isolation Inbox — đề nghị cách ly đang chờ operator
+    /// duyệt + chế độ enforcement hiện hành (trung thực WFP/logic-only).
+    IsolationInbox,
+    /// I-2: quyết định của operator (human-in-the-loop — không phá freeze
+    /// gate). `subject_hex`: 64 ký tự hex; `action`: approve|lift|reject;
+    /// `reason`: ≤ 200 ký tự — ghi DecisionLog.
+    IsolationDecision { subject_hex: String, action: String, reason: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

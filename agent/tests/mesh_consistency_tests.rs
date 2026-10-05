@@ -103,7 +103,7 @@ fn test_02_quorum_ignores_stale_epoch_votes_after_partition() {
         obs_channel: ObsChannel::Kernel,
         evidence_root: [0xA1; 32],
         causal_parents: vec![],
-        arrival_path: 1,
+        path_class: 1,
         weight: 1000,
     };
     let out = evaluate_quorum(

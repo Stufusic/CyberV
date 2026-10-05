@@ -6,6 +6,7 @@ from .recovery_page import RecoveryPage
 from .diagnostics_page import DiagnosticsPage
 from .settings_page import SettingsPage
 from .about_page import AboutPage
+from .isolation_page import IsolationPage
 
 __all__ = [
     "DashboardPage",
@@ -16,4 +17,5 @@ __all__ = [
     "DiagnosticsPage",
     "SettingsPage",
     "AboutPage",
+    "IsolationPage",
 ]

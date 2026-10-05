@@ -110,7 +110,7 @@ pub struct SuspectRank {
 /// Deterministic: sort theo (epoch, origin_seq, origin_id, event_id). Trả
 /// None nếu không có event nào đủ provenance.
 ///
-/// `events_with_path`: event kèm đường nhận (arrival_path) — điều kiện 5 của
+/// `events_with_path`: event kèm đường nhận (path_class) — điều kiện 5 của
 /// independence; ranking tái dùng **cùng một** greedy independence với quorum
 /// (`quorum::independent_accepted`) để con số independent_sources không lệch
 /// giữa hai đường tính.

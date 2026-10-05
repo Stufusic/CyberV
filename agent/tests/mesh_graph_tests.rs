@@ -40,13 +40,15 @@ fn test_02_illegal_transitions_rejected() {
     let mut g = MeshGraph::new();
     g.observe(nid(1), 1000).unwrap(); // Discovered
 
-    // Từ Discovered KHÔNG được nhảy cóc vượt Attested.
+    // M-PLAN §6.3: Discovered → Suspect là CHIỀU XẤU HƠN (probation sau cách
+    // ly) nên ĐƯỢC phép — không phải nhảy cóc nâng trust.
+    g.transition(&nid(1), NodeState::Suspect).unwrap();
+    // ... nhưng Isolated vẫn không thể từ Discovered/Suspect mới vào (qua
+    // bảng §3 isolate phải đi từ Suspect với TTL).
+    let mut g2 = MeshGraph::new();
+    g2.observe(nid(1), 1000).unwrap();
     assert!(matches!(
-        g.transition(&nid(1), NodeState::Suspect),
-        Err(MeshError::IllegalTransition { .. })
-    ));
-    assert!(matches!(
-        g.transition(&nid(1), NodeState::Isolated),
+        g2.transition(&nid(1), NodeState::Isolated),
         Err(MeshError::IllegalTransition { .. })
     ));
 

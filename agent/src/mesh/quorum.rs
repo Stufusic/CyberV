@@ -39,8 +39,10 @@ impl Default for QuorumPolicy {
 }
 
 /// Một phiếu bầu đã qua xác thực (chữ ký + event log) và đã gắn trọng số
-/// từ ReputationLedger. `arrival_path` do tầng vận chuyển gắn — định danh
-/// đường/nhánh network mà phiếu đến (điều kiện 5 chống relay).
+/// từ ReputationLedger. `path_class` do tầng vận chuyển gắn — chuẩn hóa v2
+/// (M-PLAN §1.2): `hash(transport_id, subnet_scope)` thay vì giá trị tự do,
+/// để điều kiện 5 đánh giá đường mạng THẬT (cùng transport + cùng segment
+/// = cùng đường, kể cả khi hai origin khác nhau).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ballot {
     pub event_id: [u8; 32],
@@ -51,7 +53,7 @@ pub struct Ballot {
     pub obs_channel: ObsChannel,
     pub evidence_root: [u8; 32],
     pub causal_parents: Vec<[u8; 32]>,
-    pub arrival_path: u64,
+    pub path_class: u64,
     pub weight: u32,
 }
 
@@ -59,7 +61,7 @@ impl Ballot {
     /// Dựng Ballot từ event. Trả `None` khi provenance không đủ — event không
     /// phải Vote, thiếu subject/evidence_root/obs_channel/signal_class chỉ là
     /// telemetry L0, KHÔNG được feeding quorum (plan §3, INV-009 planned).
-    pub fn from_event(event: &NsgEvent, weight: u32, arrival_path: u64) -> Option<Self> {
+    pub fn from_event(event: &NsgEvent, weight: u32, path_class: u64) -> Option<Self> {
         if event.kind != EventKind::Vote {
             return None;
         }
@@ -76,7 +78,7 @@ impl Ballot {
             obs_channel,
             evidence_root,
             causal_parents: event.causal_parents.clone(),
-            arrival_path,
+            path_class,
             weight,
         })
     }
@@ -129,7 +131,7 @@ pub fn pairwise_independent(a: &Ballot, b: &Ballot) -> bool {
             .causal_parents
             .iter()
             .any(|p| b.causal_parents.contains(p))
-        && a.arrival_path != b.arrival_path
+        && a.path_class != b.path_class
 }
 
 /// Tập phiếu ĐỘC LẬP (greedy theo trọng số) cho một subject — dùng chung cho
@@ -255,7 +257,7 @@ mod tests {
             obs_channel: channel,
             evidence_root: root,
             causal_parents: Vec::new(),
-            arrival_path: path,
+            path_class: path,
             weight,
         }
     }
@@ -314,6 +316,39 @@ mod tests {
             out.verdict,
             QuorumVerdict::NotReached(NotReachedReason::InsufficientSources { count: 1, required: 2 })
         );
+    }
+
+    #[test]
+    fn path_class_derived_from_real_network_reality() {
+        // M-PLAN §1.2 test chéo: path_class PHẢI dẫn xuất từ (transport,
+        // subnet_scope) thật, không phải số tự gán. Hai node cùng subnet TCP
+        // → một đường → chỉ tính một nguồn; khác transport → hai đường → độc lập.
+        use crate::mesh::transport::{path_class, subnet_scope, tcp_path_class, TransportId};
+
+        let lan_a = tcp_path_class("192.168.1.5".parse().unwrap());
+        let lan_b = tcp_path_class("192.168.1.77".parse().unwrap());
+        assert_eq!(lan_a, lan_b, "cùng /24 + cùng transport = cùng đường");
+
+        let b1 = ballot(1, [0xA1; 32], ObsChannel::Kernel, lan_a, 1000);
+        let b2 = ballot(2, [0xA2; 32], ObsChannel::FilesystemAcl, lan_b, 1000);
+        let out = evaluate_quorum(&[b1, b2], nid(0xEE), 0, |_| false, &QuorumPolicy::default());
+        assert_eq!(
+            out.verdict,
+            QuorumVerdict::NotReached(NotReachedReason::InsufficientSources { count: 1, required: 2 }),
+            "2 vote cùng path_class (cùng segment) đếm 1 — close condition M-1"
+        );
+
+        // Khác path_class (khác transport, cùng scope) + 4 điều kiện khác thoả → độc lập.
+        let wfd = path_class(TransportId::WiFiDirect, subnet_scope("192.168.1.5".parse().unwrap()));
+        let b3 = ballot(3, [0xA3; 32], ObsChannel::EtwTelemetry, wfd, 1000);
+        let out = evaluate_quorum(
+            &[ballot(1, [0xA1; 32], ObsChannel::Kernel, lan_a, 1000), b3],
+            nid(0xEE),
+            0,
+            |_| false,
+            &QuorumPolicy::default(),
+        );
+        assert!(matches!(out.verdict, QuorumVerdict::Reached { .. }));
     }
 
     #[test]
