@@ -7,14 +7,17 @@
 [![Platform: Windows 10/11 x64](https://img.shields.io/badge/Platform-Windows_10%2F11_x64-0078D6.svg)](https://microsoft.com/windows)
 [![Crypto: FIPS 180-4 & RFC 8032](https://img.shields.io/badge/Crypto-SHA--512_%2F_Ed25519-green.svg)](https://csrc.nist.gov)
 [![Kernel: KMDF 1.15](https://img.shields.io/badge/Kernel-KMDF_1.15_Altitude_385201-red.svg)](driver/CyberVProbe)
-[![Tests: 530+ Passing](https://img.shields.io/badge/Tests-530%2B_Passing-success.svg)](agent/tests)
+[![Tests: 750+ Passing](https://img.shields.io/badge/Tests-750%2B_Passing-success.svg)](agent/tests)
 [![CI: clippy -D warnings + cargo-deny](https://img.shields.io/badge/CI-clippy_DW%20%2B%20cargo--deny-blue.svg)](.github/workflows/rust.yml)
 
 > ⚠️ **Trạng thái triển khai thực tế (đọc trước khi tin bất kỳ tuyên bố nào dưới
-> đây):** lõi mật mã + logic ra quyết định + cổng cập nhật là **thật và được
-> kiểm chứng bằng test**; các giác quan phần cứng (TPM thật, dữ liệu kernel,
-> telemetry hệ thống, daemon chạy trong service) **vẫn đang mô phỏng và được
-> gắn nhãn trung thực** — lộ trình hiện thực: `Docs/PHASE1_2_IMPLEMENTATION_PLAN.md`.
+> đây):** lõi mật mã + logic ra quyết định + kênh mesh LAN (TCP + mDNS) + IPC
+> AEAD hai phía + cổng cập nhật là **thật và được kiểm chứng bằng test**; một số
+> giác quan vẫn đang mô phỏng hoặc cần điều kiện vận hành thật và được **gắn
+> nhãn trung thực** (TPM TBS cần service SYSTEM, dữ liệu kernel PCI, WiFi
+> Direct/BLE là Tier experimental tắt mặc định, verify 2 máy thật là việc
+> operator) — lộ trình hiện thực: `Docs/PHASE1_2_IMPLEMENTATION_PLAN.md` +
+> `Docs/TRANSPORT_ISOLATION_PLAN.md` §10.
 > Ma trận đầy đủ từng mối đe dọa: [`Docs/THREAT_MODEL.md`](Docs/THREAT_MODEL.md).
 
 **Nền tảng xác thực định danh thiết bị và phòng vệ điểm cuối gắn chặt phần cứng (Hardware-Anchored Device Identity & Endpoint Trust) thế hệ mới dành cho Windows.**
@@ -129,6 +132,16 @@ Các phương pháp định danh thiết bị truyền thống (như Browser Fin
 ### 2.6. Phòng Vệ Thụ Động Cấp Tiến Trình (Process Mitigations)
 * Kích hoạt Arbitrary Code Guard (ACG), Image Load Restrictions (chỉ nạp DLL của Microsoft hoặc có chữ ký CyberV), Strict Handle Checks, và tước bỏ các đặc quyền nguy hiểm không cần thiết.
 
+### 2.7. Đồ Thị An Ninh Mesh (NSG — Multi-Transport & Node Isolation)
+* **Kênh peer-to-peer có chữ ký thật (Tier A — production):** bắt tay 3 bước mutual X25519 + Ed25519 (chống MITM/reflection), phiên AEAD ChaCha20-Poly1305 hai chiều với replay window commit-sau-tag, flood-limit per-peer; discovery tự động qua **mDNS** — hai node tự tìm thấy và attest thành công **không cần cấu hình tay**.
+* **Độc lập quorum theo đường mạng thật (`path_class`):** điều kiện độc lập thứ 5 của quorum không phải "khác nhau trên giấy" — phiếu bầu được gắn `hash(transport_id, subnet_scope)`, hai phiếu đến qua cùng transport + cùng segment chỉ đếm một nguồn. Hệ quả chủ ý: mesh phẳng một subnet + một transport **không tự đủ quorum** — cần đa dạng đường (khác transport hoặc khác segment).
+* **Đa giao thức xếp tầng (Tier A/B/C):** Tier B WiFi Direct qua shim WinRT C++20 (biên giới extern-"C", build qua `build.rs`/`cc` — data path là TCP thuần trên endpoint WinRT cấp, tái dụng nguyên bộ handshake/AEAD) và Tier C BLE beacon nén 26 byte — **cùng tắt mặc định**, không bao giờ nâng trust (presence ≠ trust).
+* **Thang cách ly 3 bậc (human-in-the-loop):**
+  * **I-1 Tự cách ly:** node phát hiện tamper → tự hạ `Isolated` với TTL bắt buộc, phát alert có chữ ký; peer chỉ hành động theo chiều xấu hơn.
+  * **I-2 Operator-approved:** quorum đạt → đề nghị vào **Isolation Inbox** trên UI → người dùng duyệt mới thực thi WFP thật (block per-IP hai chiều, rule marker `CyberV-NSG-*`, deadline TTL tuyệt đối, reconcile khi reboot); thiếu quyền admin → fallback `LOGIC_ONLY` trung thực, không giả vờ chặn.
+  * **I-3 Auto-pilot:** vẫn bị chặn bởi freeze gate — không tự hành động.
+* **Grace de-escalation:** hết TTL + re-attest phải đi qua `Suspect` (probation K tick sạch) mới được `Attested` — giảm ping-pong isolate/un-isolate.
+
 ---
 
 ## 3. Ma Trận Bất Biến An Ninh (Core Invariants)
@@ -145,6 +158,10 @@ Hệ thống được thiết kế xoay quanh 8 bất biến an ninh nền tản
 | **INV-006** | **Contradiction & Resilience** | Phát hiện bất nhất counter TPM lập tức khóa bảo vệ; EventBus tự phục hồi khi Mutex bị nhiễm độc (Poisoned). | Tự cứu hàng đợi sự kiện, không làm treo hệ thống. |
 | **INV-007** | **Telemetry Integrity** | Các module kiểm toán tiến trình và đặc quyền báo cáo trung thực cờ `is_verified` từ hệ điều hành. | Ngăn chặn việc làm giả cờ xác minh. |
 | **INV-008** | **Guaranteed Memory Zeroize** | Vùng nhớ nhạy cảm chứa khóa bí mật, seed được xóa sạch bằng `zeroize::Zeroize` khi giải phóng (`Drop`). | Chống tối ưu hóa loại bỏ Dead-Store của compiler. |
+| **INV-012** | **Presence ≠ Trust (mesh)** | Beacon mDNS/BLE/WFD chỉ cho trạng thái `Discovered` — chỉ bắt tay chữ ký thật mới được `Attested`; peer không có neo pinning enrollment bị từ chối. | BLE/mDNS presence không tạo node, không nâng NodeState. |
+| **INV-014** | **Isolation Reversibility** | Mọi isolation có TTL deadline tuyệt đối (reboot không reset); hết hạn tự lift về `Unknown`; recovery vĩnh viễn cần chữ ký authority. | Không tồn tại isolation vĩnh viễn — test chứng minh isolations == lifts. |
+
+*(mesh đang mở rộng bộ bất biến INV-009…INV-015 — chi tiết: `Docs/INVARIANTS.md`)*
 
 ---
 
@@ -244,6 +261,7 @@ Bên cạnh giao diện web hạm đội (Fleet Web Dashboard), CyberV cung cấ
 │  • Tự động thu thập phần cứng máy thật (CPU, RAM, Mainboard, TPM 2.0)  │
 │  • Bảng chẩn đoán kỹ thuật 4 tầng (4-Tier Self-Test Diagnostics)       │
 │  • Cổng khôi phục mật mã Ed25519 có thời hạn (Recovery Attestation)   │
+│  • Isolation Inbox: duyệt/gỡ đề nghị cách ly mesh (human-in-the-loop)  │
 │  • Khay hệ thống thông minh (System Tray Dynamic Status & Alerts)      │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │ Windows Named Pipe: \\.\pipe\CyberVIPC
@@ -381,11 +399,11 @@ Sử dụng `signtool.exe` từ Windows SDK để tự động tạo chứng ch�
 
 ## 8. Kiểm Thử Chất Lượng & Chịu Tải
 
-### Chạy Toàn Bộ Test Suite (240+ bài test)
+### Chạy Toàn Bộ Test Suite (750+ bài test Rust, 50 test binary)
 ```powershell
-cd agent
-cargo test
+cargo test --workspace --release
 ```
+* Bao gồm 4 nhóm mesh: transport (TCP loopback thật), isolation (self-isolate + TTL), isolation desk (quorum 2 đường thật + duyệt operator), shim boundary (mỗi hàm WinRT 1 test) — kèm test quorum/graph/gossip/consistency/sim.
 
 ### Chạy Kiểm Thử Chịu Tải Cao (High-Load Stress Tests)
 ```powershell
@@ -402,11 +420,11 @@ powershell -ExecutionPolicy Bypass -File scripts\run_mutation_tests.ps1
 * Đánh giá 16/16 mutants tiêm lỗi mã nguồn thực tế.
 * Kết quả: **16 KILLED, 0 SURVIVED (100.0% Mutation Score)**.
 
-### Chạy Bộ Kiểm Thử Giao Diện & Bất Biến An Ninh (UI Test Suite - 30 Tests)
+### Chạy Bộ Kiểm Thử Giao Diện & Bất Biến An Ninh (UI Test Suite - 43 Tests)
 ```powershell
-python -m unittest discover -s cyberv_ui/tests -p "test_*.py" -v
+python -m pytest -q
 ```
-* Kiểm thử Anti-Downgrade Invariant, Local Assessment Mode, Handshake Protocol, và Visual Truth Palette: **30/30 PASSED (100%)**.
+* Kiểm thử Anti-Downgrade Invariant, Local Assessment Mode, Handshake Protocol, Isolation Service bounds, và Visual Truth Palette: **43/43 PASSED (100%)**.
 
 ---
 
@@ -415,23 +433,27 @@ python -m unittest discover -s cyberv_ui/tests -p "test_*.py" -v
 ```text
 CyberV/
 ├── agent/                       # CyberV Core Agent (Rust)
+│   ├── build.rs                 # Biên dịch WinRT shim (cc) — WiFi Direct / BLE
+│   ├── shim/                    # Shim C++20 WinRT (extern-"C" thuần — HYBRID §1.1)
 │   ├── src/
 │   │   ├── defense/             # Policy Engine, ACG, Isolation, Staging, Recovery
 │   │   ├── fingerprint/         # Device Evidence Graph, Topological Nodes, State Hasher
 │   │   ├── hardware/            # Hardware Observation (WMI, CPU, Board, RAM, Disk)
 │   │   ├── identity/            # DPAPI Vault, Ed25519 Keypair, CSPRNG, Zeroize
 │   │   ├── kernel/              # IOCTL Protocol & Kernel Probe Client
+│   │   ├── mesh/                # NSG Mesh: transport (TCP/mDNS/WFD/BLE), quorum,
+│   │   │                        #   gossip, shadow ledger, isolation, WFP, node engine
 │   │   ├── service.rs           # Windows Service SCM Dispatcher & Lifecycle Manager
 │   │   └── trust/               # TPM 2.0 NV Counter, Contradiction Detection, PCRs
-│   └── tests/                   # 10+ Test Suites (Audit, Stress, Mutation Oracles)
+│   └── tests/                   # 20+ Test Suites (Audit, Stress, Mesh, Mutation Oracles)
 ├── cyberv_ui/                   # Desktop Native UI Client (Python / PySide6 Qt)
 │   ├── hardware/                # Local Probed Hardware Collector & TPM Probe
 │   ├── ipc/                     # Hardened Named Pipe Client & Handshake Protocol
 │   ├── models/                  # 5-State Protection Models & Security Events
 │   ├── security/                # Display Policy Gatekeeper (Anti-Downgrade Invariant)
-│   ├── services/                # Background Polling & UAC Elevation Controller
-│   ├── ui/                      # Trang giao diện, Thẻ phân rã 2 khối, Widgets, System Tray
-│   └── tests/                   # 30 Unit, Fault Injection & Adversarial Tests
+│   ├── services/                # Background Polling, UAC Controller, Isolation Service
+│   ├── ui/                      # Trang giao diện (Dashboard, Isolation Inbox, ...), Tray
+│   └── tests/                   # 43 Unit, Fault Injection & Adversarial Tests
 ├── dashboard/                   # Fleet Management UI (React, TypeScript, Vite)
 ├── dist/                        # Nhị phân thực thi độc lập (dist/CyberV-UI/CyberV-UI/CyberV-UI.exe)
 ├── driver/                      # Windows KMDF Kernel Driver (C / WDK)
@@ -476,6 +498,9 @@ Dự án **CyberV** được định vị là **Nền tảng kiến trúc an nin
 5. **Kiểm thử Rung Lắc IOCTL (Kernel Boundary Fuzzing):**
    * *Hiện trạng:* Đã vượt qua các bài kiểm thử unit/adversarial in-process fuzzing với các buffer dị dạng, sai kích thước, saturation và con trỏ rác.
    * *Giới hạn:* Chưa trải qua các chiến dịch fuzzing kernel dài hạn chuyên dụng (như Google Syzkaller hoặc kAFL) trong môi trường ảo hóa hypervisor 48h+.
+6. **Mesh đa giao thức & cách ly node (NSG / M-PLAN):**
+   * *Hiện trạng:* Tier A (TCP-LAN + mDNS) chạy thật và được test chứng minh trên loopback/LAN; cách ly I-1/I-2 có WFP thật (per-IP, TTL tuyệt đối, reconcile) + Isolation Inbox; mesh-sim mô phỏng 256 node.
+   * *Giới hạn:* (a) mesh phẳng một subnet + một transport không tự đủ quorum (chủ ý — cần đa dạng đường); (b) WiFi Direct chưa có browse chủ động do Windows.winmd của SDK thiếu `WiFiDirectAdvertisementWatcher` — connect dùng device_id đã pin enrollment; (c) verify bắt tay 2 máy thật qua WFD/BLE + fault ngắt carrier là việc operator (thiết bị vật lý); (d) thực thi WFP cần quyền admin — thiếu quyền chuyển `LOGIC_ONLY` trung thực; (e) auto-pilot (I-3) bị freeze gate chặn — không tự hành động.
 
 ### 10.2. Lộ Trình Nghiên Cứu & Phát Triển (Research Roadmap)
 
