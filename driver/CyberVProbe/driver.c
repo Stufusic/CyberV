@@ -3,6 +3,8 @@
 
 #include <ntddk.h>
 #include <wdf.h>
+#include <ntddstor.h>
+#include <ntstrsafe.h>
 #include "ioctl.h"
 #include "ob_callbacks.h"
 
@@ -37,6 +39,76 @@ NTSTATUS DriverEntry(
     }
 
     return STATUS_SUCCESS;
+}
+
+static VOID CyberVQueryStorageSerial(
+    _In_ ULONG diskIndex,
+    _Out_writes_bytes_(maxLen) PCHAR outSerial,
+    _In_ ULONG maxLen
+) {
+    if (outSerial == NULL || maxLen == 0) return;
+    RtlZeroMemory(outSerial, maxLen);
+
+    UNICODE_STRING deviceName;
+    WCHAR deviceNameBuf[64];
+    NTSTATUS status = RtlStringCchPrintfW(deviceNameBuf, 64, L"\\Device\\Harddisk%lu\\DR%lu", diskIndex, diskIndex);
+    if (!NT_SUCCESS(status)) return;
+    RtlInitUnicodeString(&deviceName, deviceNameBuf);
+
+    PFILE_OBJECT fileObject = NULL;
+    PDEVICE_OBJECT deviceObject = NULL;
+    status = IoGetDeviceObjectPointer(&deviceName, FILE_READ_ATTRIBUTES, &fileObject, &deviceObject);
+    if (!NT_SUCCESS(status) || fileObject == NULL || deviceObject == NULL) {
+        return;
+    }
+
+    STORAGE_PROPERTY_QUERY query;
+    RtlZeroMemory(&query, sizeof(query));
+    query.PropertyId = StorageDeviceProperty;
+    query.QueryType = PropertyStandardQuery;
+
+    UCHAR buffer[512];
+    RtlZeroMemory(buffer, sizeof(buffer));
+
+    KEVENT event;
+    KeInitializeEvent(&event, NotificationEvent, FALSE);
+    IO_STATUS_BLOCK ioStatus;
+
+    PIRP irp = IoBuildDeviceIoControlRequest(
+        IOCTL_STORAGE_QUERY_PROPERTY,
+        deviceObject,
+        &query,
+        sizeof(query),
+        buffer,
+        sizeof(buffer),
+        FALSE,
+        &event,
+        &ioStatus
+    );
+
+    if (irp != NULL) {
+        status = IoCallDriver(deviceObject, irp);
+        if (status == STATUS_PENDING) {
+            KeWaitForSingleObject(&event, Executive, KernelMode, FALSE, NULL);
+            status = ioStatus.Status;
+        }
+
+        if (NT_SUCCESS(status) && ioStatus.Information >= sizeof(STORAGE_DEVICE_DESCRIPTOR)) {
+            PSTORAGE_DEVICE_DESCRIPTOR desc = (PSTORAGE_DEVICE_DESCRIPTOR)buffer;
+            // Variable storage descriptor bounds check
+            if (desc->SerialNumberOffset != 0 && desc->SerialNumberOffset < ioStatus.Information) {
+                PCSTR serial = (PCSTR)(buffer + desc->SerialNumberOffset);
+                ULONG serialLen = 0;
+                while (desc->SerialNumberOffset + serialLen < ioStatus.Information && serial[serialLen] != '\0' && serialLen < maxLen - 1) {
+                    outSerial[serialLen] = serial[serialLen];
+                    serialLen++;
+                }
+                outSerial[serialLen] = '\0';
+            }
+        }
+    }
+
+    ObDereferenceObject(fileObject);
 }
 
 static VOID CyberVCollectPciTopology(_Out_ PCYBERV_KERNEL_OBSERVATION obs) {
@@ -99,6 +171,25 @@ static VOID CyberVCollectPciTopology(_Out_ PCYBERV_KERNEL_OBSERVATION obs) {
                 }
             }
 
+            // Header Type check: Type 0 endpoint vs Type 1/2 bridge
+            BOOLEAN isBridge = FALSE;
+            UCHAR deviceClass = 0x01; // Default Type 0 endpoint (Mass Storage)
+            for (ULONG i = 0; i + 5 <= nameChars; i++) {
+                if (name[i] == L'C' && name[i+1] == L'C' && name[i+2] == L'_') {
+                    if (name[i+3] == L'0' && name[i+4] == L'6') {
+                        isBridge = TRUE; // Header Type 1/2 Bridge
+                        deviceClass = 0x06;
+                    } else if (name[i+3] == L'0' && name[i+4] == L'1') {
+                        deviceClass = 0x01; // Mass Storage
+                    } else if (name[i+3] == L'0' && name[i+4] == L'2') {
+                        deviceClass = 0x02; // Network
+                    } else if (name[i+3] == L'0' && name[i+4] == L'3') {
+                        deviceClass = 0x03; // Display
+                    }
+                    break;
+                }
+            }
+
             if (foundVen && foundDev && ven != 0 && dev != 0) {
                 obs->Devices[obs->DeviceCount].VendorId = (unsigned short)ven;
                 obs->Devices[obs->DeviceCount].DeviceId = (unsigned short)dev;
@@ -108,7 +199,17 @@ static VOID CyberVCollectPciTopology(_Out_ PCYBERV_KERNEL_OBSERVATION obs) {
                 obs->Devices[obs->DeviceCount].Bus = (unsigned char)(index & 0xFF);
                 obs->Devices[obs->DeviceCount].Device = (unsigned char)((index >> 3) & 0x1F);
                 obs->Devices[obs->DeviceCount].Function = (unsigned char)(index & 0x07);
-                obs->Devices[obs->DeviceCount].DeviceClass = 0x01;
+                obs->Devices[obs->DeviceCount].DeviceClass = deviceClass;
+
+                // Nếu là Mass Storage (Header Type 0 endpoint), truy vấn serial đĩa qua IOCTL_STORAGE_QUERY_PROPERTY
+                if (!isBridge && deviceClass == 0x01) {
+                    CyberVQueryStorageSerial(
+                        obs->DeviceCount,
+                        obs->Devices[obs->DeviceCount].SerialNumber,
+                        sizeof(obs->Devices[obs->DeviceCount].SerialNumber)
+                    );
+                }
+
                 obs->DeviceCount++;
             }
         }
@@ -118,6 +219,7 @@ static VOID CyberVCollectPciTopology(_Out_ PCYBERV_KERNEL_OBSERVATION obs) {
 
     ZwClose(hPciKey);
 }
+
 
 VOID CyberVProbeEvtDriverUnload(
     _In_ WDFDRIVER Driver

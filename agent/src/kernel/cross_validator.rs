@@ -99,6 +99,8 @@ impl CrossLayerValidator {
             .filter(|c| c.component_type == ComponentType::Storage)
             .collect();
 
+        let mut matched_count = 0usize;
+
         for disk in &storage_disks {
             let raw_user_serial = disk.attributes.get("serial").cloned().unwrap_or_default();
             let clean_user = raw_user_serial
@@ -111,6 +113,7 @@ impl CrossLayerValidator {
                 if !pci_matches_disk(kdev, disk) {
                     continue;
                 }
+                matched_count = matched_count.saturating_add(1);
 
                 if let Some(k_serial) = &kdev.serial_number {
                     let clean_kernel = k_serial.trim().to_lowercase().replace(['-', ' '], "");
@@ -143,6 +146,28 @@ impl CrossLayerValidator {
                     }
                 }
             }
+        }
+
+        // Bất biến INV-002: Nếu không có thiết bị lưu trữ nào được khớp chéo giữa Userland và Kernel
+        // (matched_count == 0), hệ thống KHÔNG ĐƯỢC tự nhận là Consistent hay hardware_verified = true.
+        // Phải trả về ValidationStatus::Unknown với is_hardware_verified = false (Fail-Closed).
+        if matched_count == 0 {
+            let vnode = create_kernel_vnode("UNKNOWN", 10000, false);
+            let point = VirtualPoint::new(
+                "point:kernel_consistency",
+                10000,
+                10000,
+                KERNEL_DERIVATION_VERSION,
+            );
+            return CrossLayerValidationReport {
+                status: ValidationStatus::Unknown,
+                consistency_score: 10000,
+                penalty: 0,
+                is_hardware_verified: false,
+                virtual_nodes: vec![vnode],
+                virtual_points: vec![point],
+                description: "Không tìm thấy thiết bị phần cứng tương ứng giữa Kernel Probe và Userland (Zero-match fallback: is_hardware_verified = false)".to_string(),
+            };
         }
 
         let vnode = create_kernel_vnode("CONSISTENT", 10000, true);

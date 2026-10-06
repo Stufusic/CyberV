@@ -13,10 +13,12 @@
 //! Các ngưỡng policy hiện là `Default` placeholder — khi NSG-3 chuyển sang
 //! signed policy sẽ tái dụng kênh INV-011 và giá trị mặc định chỉ là sở khởi.
 
+pub mod admission;
 pub mod consistency;
 pub mod correlation;
 pub mod discovery;
 pub mod events;
+pub mod gate;
 pub mod gossip;
 pub mod graph;
 pub mod isolation;
@@ -80,4 +82,10 @@ pub enum MeshError {
 
     #[error("Endpoint transport không hợp lệ: {0}")]
     InvalidEndpoint(String),
+
+    #[error("Vượt trần sức chứa/tài nguyên mesh (Admission Gate): {0}")]
+    CapacityExceeded(String),
+
+    #[error("Peer bị từ chối nhập môn bởi Admission Gate: {0}")]
+    AdmissionRejected(String),
 }

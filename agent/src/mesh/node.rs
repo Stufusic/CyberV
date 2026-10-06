@@ -167,6 +167,7 @@ pub struct MeshNodeConfig {
     pub arrival_ttl_ms: u64,
     pub quorum: QuorumPolicy,
     pub gossip: GossipPolicy,
+    pub admission: super::admission::MeshAdmissionPolicy,
 }
 
 impl Default for MeshNodeConfig {
@@ -185,6 +186,7 @@ impl Default for MeshNodeConfig {
             arrival_ttl_ms: DEFAULT_ARRIVAL_TTL_MS,
             quorum: QuorumPolicy::default(),
             gossip: GossipPolicy::default(),
+            admission: super::admission::MeshAdmissionPolicy::default(),
         }
     }
 }
@@ -265,6 +267,8 @@ struct NodeCore {
     arrival: HashMap<[u8; 32], ArrivalRecord>,
     arrival_order: VecDeque<[u8; 32]>,
     stats: MeshNodeStats,
+    /// Gate 4: Bộ kiểm soát nhập môn (Admission Gate) và State Machine.
+    admission: super::admission::MeshAdmissionController,
 }
 
 /// Một node mesh chạy thật trên transport TCP (Tier A).
@@ -316,6 +320,10 @@ impl MeshNode {
             max_total_links: config.max_total_links,
         };
         let gossip_policy = config.gossip.clone();
+        let mut admission = super::admission::MeshAdmissionController::new(config.admission.clone());
+        for &peer_id in pinned_peers.keys() {
+            admission.authorize_peer(peer_id);
+        }
         Self {
             identity: Arc::new(identity),
             self_id,
@@ -346,6 +354,7 @@ impl MeshNode {
                 arrival: HashMap::new(),
                 arrival_order: VecDeque::new(),
                 stats: MeshNodeStats::default(),
+                admission,
             })),
         }
     }
@@ -356,6 +365,23 @@ impl MeshNode {
 
     pub fn config(&self) -> &MeshNodeConfig {
         &self.config
+    }
+
+    /// Trạng thái thực thi hiện hành của nút (Gate 4).
+    pub async fn enforcement_state(&self) -> super::admission::MeshEnforcementState {
+        self.core.lock().await.admission.state()
+    }
+
+    /// Thiết lập trạng thái thực thi cho nút.
+    pub async fn set_enforcement_state(&self, state: super::admission::MeshEnforcementState) {
+        self.core.lock().await.admission.set_state(state);
+    }
+
+    /// Thêm peer được ủy quyền vào Admission Gate và Pinned map.
+    pub async fn authorize_peer(&self, peer: NodeId, vk: VerifyingKey) {
+        let mut core = self.core.lock().await;
+        core.admission.authorize_peer(peer);
+        core.pinned.insert(peer, vk);
     }
 
     /// Bind listener (nếu chưa) + bật accept loop. Gọi lần hai → lỗi rõ ràng
@@ -644,6 +670,16 @@ impl MeshNode {
                 .expect("gate trên đã xác thực bytes");
             {
                 let mut core = self.core.lock().await;
+                let verdict = core.admission.evaluate_candidate(
+                    &beacon.node_id,
+                    &vk,
+                    core.epoch,
+                    core.pinned.len(),
+                );
+                if verdict != super::admission::AdmissionVerdict::Admitted {
+                    core.stats.beacons_rejected = core.stats.beacons_rejected.saturating_add(1);
+                    continue;
+                }
                 if core.pinned.insert(beacon.node_id, vk).is_none() {
                     // Node mới qua discovery — CHỈ Discovered (presence ≠ trust).
                     let _ = core.graph.observe(beacon.node_id, self.clock.now_mono_ms());

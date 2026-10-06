@@ -18,8 +18,8 @@ use super::super::discovery::{MeshBeacon, BEACON_VERSION};
 use super::super::graph::NodeId;
 use super::super::MeshError;
 
-/// Loại dịch vụ mDNS của mesh CyberV.
-pub const MDNS_SERVICE_TYPE: &str = "_cyberv-mesh._udp.local.";
+/// Loại dịch vụ mDNS của mesh CyberV (RFC 6763: TCP transport bắt buộc dùng _tcp).
+pub const MDNS_SERVICE_TYPE: &str = "_cyberv-mesh._tcp.local.";
 /// Key TXT chứa beacon hex.
 pub const MDNS_TXT_BEACON: &str = "beacon";
 /// Prefix instance name — "cyberv-" + 8 hex của node_id = 15 ký tự, đúng

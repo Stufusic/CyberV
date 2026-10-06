@@ -88,11 +88,18 @@ serve(async (req) => {
     const now = new Date();
     const expiresAt = new Date(now.getTime() + CHALLENGE_TTL_SECONDS * 1000);
 
-    // 4. Insert challenge using service role or elevated client
+    // 4. Issue challenge using service role: enforce single active nonce per device
     const adminClient = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
     );
+
+    // Invalidate previous unconsumed challenges for this device
+    await adminClient
+      .from("challenges")
+      .update({ consumed: true, consumed_at: now.toISOString() })
+      .eq("device_id", device_id)
+      .eq("consumed", false);
 
     const { data: challenge, error: insertError } = await adminClient
       .from("challenges")

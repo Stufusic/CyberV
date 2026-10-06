@@ -40,6 +40,10 @@ pub struct AgentStatusSnapshot {
     pub last_attested_at: Option<u64>,
     /// Probe driver thật tại thời điểm snapshot (CreateFileW tới \\.\CyberVProbe)
     pub driver_available: bool,
+    /// P2-1b: NOT_WIRED / OK / READ_ERROR: ... / ROLLBACK_DETECTED: ...
+    pub tpm_counter_status: String,
+    pub tpm_last_counter: Option<u64>,
+    pub tpm_rollback_detected: bool,
     pub updated_at: u64,
 }
 
@@ -105,7 +109,17 @@ pub fn snapshot_to_getstatus_value(s: &AgentStatusSnapshot) -> serde_json::Value
             "last_attested_at": s.last_attested_at
         },
         "hardware_verified": s.state == "ACTIVE",
-        "tpm_contradiction": null,
+        // P2-1b: null khi counter chưa wire (trung thực — không bịa);
+        // wired → object trạng thái thật.
+        "tpm_contradiction": if s.tpm_counter_status == "NOT_WIRED" {
+            serde_json::Value::Null
+        } else {
+            serde_json::json!({
+                "counter_status": s.tpm_counter_status,
+                "last_counter": s.tpm_last_counter,
+                "rollback_detected": s.tpm_rollback_detected,
+            })
+        },
         "verification_hash": null,
         "graph_version": s.graph_version,
         "device_id": s.device_id,
@@ -185,6 +199,9 @@ where
             graph_version,
             last_attested_at: last_attested,
             driver_available,
+            tpm_counter_status: daemon.tpm_counter_status().to_string(),
+            tpm_last_counter: daemon.tpm_last_counter(),
+            tpm_rollback_detected: daemon.tpm_rollback_detected(),
             updated_at: now_secs(),
         });
         let _ = hardware_verified; // đã thể hiện qua state == "ACTIVE" trong map ở trên
@@ -237,6 +254,12 @@ pub async fn run_configured_daemon(
         device_id,
         config.user_jwt.clone(),
     )
+    // P2-1b: anti-rollback guard — TBS thật khi service SYSTEM được phép,
+    // fallback phần mềm trung thực (assurance SoftwareFallback) khi không.
+    .with_nv_counter(
+        Box::new(crate::trust::tpm::WindowsTbsNvCounter::new()),
+        crate::trust::tpm::DEFAULT_CYBERV_NV_INDEX,
+    )
     .with_config(DaemonConfig {
         attestation_interval_secs: config.attestation_interval_secs,
         max_offline_grace_secs: config.max_offline_grace_secs,
@@ -281,6 +304,9 @@ mod tests {
             graph_version: 2,
             last_attested_at: Some(100),
             driver_available: true,
+            tpm_counter_status: "NOT_WIRED".to_string(),
+            tpm_last_counter: None,
+            tpm_rollback_detected: false,
             updated_at: 200,
         };
         let v = snapshot_to_getstatus_value(&snap);
@@ -290,6 +316,21 @@ mod tests {
         // Trường chưa có dữ liệu thật phải là null, không bịa
         assert_eq!(v["verification_hash"], serde_json::Value::Null);
         assert_eq!(v["tpm_contradiction"], serde_json::Value::Null);
+
+        // P2-1b: counter wired → object trạng thái thật, không null
+        let mut wired = snap.clone();
+        wired.tpm_counter_status = "OK".to_string();
+        wired.tpm_last_counter = Some(42);
+        let v1 = snapshot_to_getstatus_value(&wired);
+        assert_eq!(v1["tpm_contradiction"]["counter_status"], "OK");
+        assert_eq!(v1["tpm_contradiction"]["last_counter"], 42);
+        assert_eq!(v1["tpm_contradiction"]["rollback_detected"], false);
+
+        let mut rolled = snap.clone();
+        rolled.tpm_counter_status = "ROLLBACK_DETECTED: counter 3 < lần đọc trước 5".to_string();
+        rolled.tpm_rollback_detected = true;
+        let v2 = snapshot_to_getstatus_value(&rolled);
+        assert_eq!(v2["tpm_contradiction"]["rollback_detected"], true);
 
         let mut offline = snap.clone();
         offline.state = "OFFLINE_GRACE".to_string();

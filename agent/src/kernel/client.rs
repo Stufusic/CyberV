@@ -18,6 +18,17 @@ use windows_sys::Win32::Storage::FileSystem::{
 use windows_sys::Win32::System::IO::DeviceIoControl;
 
 #[repr(C, packed)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RawCybervAbiHeader {
+    pub magic: u32,
+    pub abi_version: u32,
+    pub header_size: u32,
+    pub total_payload_size: u32,
+    pub flags: u32,
+    pub reserved: [u32; 4],
+}
+
+#[repr(C, packed)]
 #[derive(Clone, Copy)]
 struct RawCybervPciDevice {
     vendor_id: u16,

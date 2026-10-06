@@ -537,3 +537,38 @@ async fn test_15_end_to_end_daemon_full_lifecycle() {
         }
     ));
 }
+
+#[tokio::test]
+async fn test_16_offline_grace_period_expired_via_monotonic_clock() {
+    let mut rng = OsCryptoRng;
+    let key = DeviceIdentityKey::generate(&mut rng).unwrap();
+    let transport = MockDeviceTransport::new();
+    let collector = MockHardwareCollector::baseline().unwrap();
+
+    let mut daemon = AgentDaemon::new(transport.clone(), collector, key, "DEV-MONO-01", "mock_jwt")
+        .with_config(cyberv_agent::daemon::DaemonConfig {
+            attestation_interval_secs: 1,
+            max_offline_grace_secs: 1, // 1 giây grace period
+        });
+
+    daemon.enroll().await.unwrap();
+
+    // Gây lỗi mạng -> Chuyển sang OfflineGracePeriod
+    transport
+        .set_forced_error(Some(TransportError::Timeout))
+        .await;
+    let s1 = daemon.tick().await.unwrap();
+    assert!(matches!(s1, AgentState::OfflineGracePeriod { .. }));
+
+    // Đợi 1.5s để monotonic time vượt quá max_offline_grace_secs (1s)
+    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+
+    // Tick tiếp theo trong khi mạng vẫn lỗi: monotonic clock kích hoạt SuspendedOrRejected
+    let s2 = daemon.tick().await;
+    assert!(s2.is_err());
+    assert!(matches!(
+        daemon.state(),
+        AgentState::SuspendedOrRejected { .. }
+    ));
+}
+

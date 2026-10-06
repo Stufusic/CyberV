@@ -25,4 +25,9 @@ pub use topology::{
     BusNode, HardwareTopologyEngine, HardwareTopologyReport, MemoryChannel, MemoryChannelMode,
     MemoryTopology, PciLocation,
 };
-pub use unified::{EvidenceClass, EvidenceItem, EvidenceSource};
+pub use unified::{
+    EvidenceClass, EvidenceItem, EvidenceSource, EvidenceSourceWeight, HardwareEvidenceState,
+    MAX_CONFIDENCE_KERNEL_BUS, MAX_CONFIDENCE_MESH_QUORUM, MAX_CONFIDENCE_STORAGE_PNP,
+    MAX_CONFIDENCE_TPM_QUOTE, MAX_CONFIDENCE_USER_WMI,
+};
+

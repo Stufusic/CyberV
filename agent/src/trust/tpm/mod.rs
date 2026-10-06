@@ -6,6 +6,7 @@ pub mod errors;
 pub mod key;
 pub mod nv_counter;
 pub mod pcr;
+pub mod pcp;
 pub mod provider;
 pub mod tbs;
 pub mod quote;
@@ -19,5 +20,6 @@ pub use nv_counter::{
     WindowsTbsNvCounter, DEFAULT_CYBERV_NV_INDEX,
 };
 pub use pcr::{HashAlgorithm, PcrBank, PcrPolicy};
+pub use pcp::{verify_p256, P256PublicKey, PcpAttestationKey, CYBERV_ATTEST_KEY_NAME};
 pub use provider::{MockTpmProvider, TpmProvider};
 pub use quote::{TpmAttestationPayload, TpmQuote};

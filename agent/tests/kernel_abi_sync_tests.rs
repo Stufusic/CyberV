@@ -11,8 +11,10 @@
 
 use cyberv_agent::kernel::protocol::{
     IOCTL_CYBERV_GET_PCI_INFO, IOCTL_CYBERV_GET_SHIELD_TELEMETRY,
-    IOCTL_CYBERV_GET_TOPOLOGY, IOCTL_CYBERV_REGISTER_PROTECTED_PID, CYBERV_ABI_VERSION,
+    IOCTL_CYBERV_GET_TOPOLOGY, IOCTL_CYBERV_REGISTER_PROTECTED_PID, CYBERV_ABI_MAGIC,
+    CYBERV_ABI_VERSION,
 };
+
 
 const IOCTL_H_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../driver/CyberVProbe/ioctl.h");
 
@@ -110,3 +112,39 @@ fn registration_struct_contains_client_abi_version_on_both_sides() {
         "client.rs thiếu client_abi_version (anti ABI drift field)"
     );
 }
+
+#[test]
+fn abi_magic_matches_between_c_and_rust() {
+    let source = std::fs::read_to_string(IOCTL_H_PATH).expect("ioctl.h");
+    let macros = parse_ioctl_header(&source);
+    let c_magic_str = macros
+        .get("CYBERV_ABI_MAGIC")
+        .expect("ioctl.h phải khai báo CYBERV_ABI_MAGIC");
+    let c_magic = u32::from_str_radix(c_magic_str.trim_start_matches("0x"), 16)
+        .expect("CYBERV_ABI_MAGIC phải là hex u32");
+
+    assert_eq!(
+        c_magic, CYBERV_ABI_MAGIC,
+        "CYBERV_ABI_MAGIC lệch giữa ioctl.h và protocol.rs"
+    );
+}
+
+#[test]
+fn abi_header_struct_defined_on_both_sides() {
+    let c_header = std::fs::read_to_string(IOCTL_H_PATH).expect("ioctl.h");
+    let rust_protocol = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/kernel/protocol.rs"
+    ))
+    .expect("kernel/protocol.rs");
+    let rust_client = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/kernel/client.rs"
+    ))
+    .expect("kernel/client.rs");
+
+    assert!(c_header.contains("CYBERV_ABI_HEADER"), "ioctl.h thiếu CYBERV_ABI_HEADER");
+    assert!(rust_protocol.contains("CybervAbiHeader"), "protocol.rs thiếu CybervAbiHeader");
+    assert!(rust_client.contains("RawCybervAbiHeader"), "client.rs thiếu RawCybervAbiHeader");
+}
+

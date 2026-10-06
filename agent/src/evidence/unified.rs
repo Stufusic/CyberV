@@ -32,6 +32,76 @@ impl std::fmt::Display for EvidenceClass {
     }
 }
 
+/// 5-State Taxonomy cho Bằng chứng Phần cứng (Docs/GATE0_SECURITY_CONTRACT_FREEZE.md §1.2)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum HardwareEvidenceState {
+    /// TPM 2.0 phần cứng + IOMMU bật + Kernel Bus trực tiếp khớp danh sách thiết bị
+    Physical,
+    /// Nhận diện cờ Hypervisor hợp lệ (CPUID leaf hypervisor, vTPM 2.0, synthetic bus)
+    Virtual,
+    /// Probe không thể chạy hoặc thiết bị không phản hồi (INV-007, is_hardware_verified = false)
+    #[default]
+    Unknown,
+    /// Cổng I/O hoặc thiết bị phần cứng bị ngắt kết nối vật lý
+    Unavailable,
+    /// Mâu thuẫn chéo giữa các tầng (WMI vs Kernel mismatch, Spoofer detected -> ISOLATE)
+    Conflicted,
+}
+
+
+impl HardwareEvidenceState {
+    /// Điểm tin cậy tối đa dựa trên trạng thái phân loại
+    pub fn base_confidence(&self) -> u32 {
+        match self {
+            Self::Physical => 10000,
+            Self::Virtual => 7500,
+            Self::Unavailable => 5000,
+            Self::Unknown => 0,
+            Self::Conflicted => 0,
+        }
+    }
+
+    /// Trạng thái này có mâu thuẫn cần kích hoạt ISOLATE ngay lập tức không?
+    pub fn is_conflicted(&self) -> bool {
+        matches!(self, Self::Conflicted)
+    }
+
+    /// Trạng thái này có được coi là phần cứng xác thực hay không?
+    pub fn is_hardware_verified(&self) -> bool {
+        matches!(self, Self::Physical)
+    }
+}
+
+/// Trọng số tin cậy tối đa cho các nguồn bằng chứng (Docs/GATE0_SECURITY_CONTRACT_FREEZE.md §1.3)
+pub const MAX_CONFIDENCE_TPM_QUOTE: u32 = 10000;
+pub const MAX_CONFIDENCE_KERNEL_BUS: u32 = 8500;
+pub const MAX_CONFIDENCE_STORAGE_PNP: u32 = 7000;
+pub const MAX_CONFIDENCE_MESH_QUORUM: u32 = 6000;
+pub const MAX_CONFIDENCE_USER_WMI: u32 = 2000;
+
+/// Trọng số nguồn thu thập bằng chứng theo ma trận tin cậy chống giả mạo
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum EvidenceSourceWeight {
+    TpmQuote,
+    KernelBusType0,
+    StoragePnpDescriptor,
+    MeshQuorumCorroboration,
+    UserModeWmiOrRegistry,
+}
+
+impl EvidenceSourceWeight {
+    pub fn max_confidence(&self) -> u32 {
+        match self {
+            Self::TpmQuote => MAX_CONFIDENCE_TPM_QUOTE,
+            Self::KernelBusType0 => MAX_CONFIDENCE_KERNEL_BUS,
+            Self::StoragePnpDescriptor => MAX_CONFIDENCE_STORAGE_PNP,
+            Self::MeshQuorumCorroboration => MAX_CONFIDENCE_MESH_QUORUM,
+            Self::UserModeWmiOrRegistry => MAX_CONFIDENCE_USER_WMI,
+        }
+    }
+}
+
+
 /// Nguồn gốc bằng chứng
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum EvidenceSource {

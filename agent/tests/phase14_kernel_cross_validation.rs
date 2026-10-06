@@ -219,9 +219,14 @@ fn test_13_empty_kernel_devices_safe_handling() {
     let client = MockKernelClient::available(payload);
     let report = CrossLayerValidator::validate(&snapshot, &client);
 
-    // Khi kernel không tìm thấy thiết bị nào, giữ nguyên tính toán an toàn
-    assert_eq!(report.status, ValidationStatus::Consistent);
+    // Bất biến INV-002: Kernel không tìm thấy thiết bị nào khớp -> trả về Unknown, KHÔNG được nhận là verified
+    assert_eq!(report.status, ValidationStatus::Unknown);
+    assert!(
+        !report.is_hardware_verified,
+        "Zero-match MUST NOT be marked as hardware_verified"
+    );
 }
+
 
 #[test]
 fn test_14_kernel_driver_version_verification() {

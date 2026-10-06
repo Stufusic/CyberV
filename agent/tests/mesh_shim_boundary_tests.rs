@@ -125,14 +125,18 @@ fn boundary_ble_watch_start_next_stop_roundtrip() {
     let _guard = shim_lock();
     let start = shim::ble_watch_start();
     assert!(honest_start_verdict(start), "watch start phải trung thực: {:?}", start);
-    // Next ngay: NOT_FOUND (chưa ai quảng bá) hoặc OK (có data) — không lỗi khác.
-    let next = shim::ble_watch_next();
-    match next {
-        Ok(None) | Ok(Some(_)) => {}
-        Err(r) => assert_eq!(r.status, ShimStatus::Ok, "next lỗi bất thường: {r:?}"),
+    if start.status == ShimStatus::Ok {
+        let next = shim::ble_watch_next();
+        match next {
+            Ok(None) | Ok(Some(_)) => {}
+            Err(r) => assert_eq!(r.status, ShimStatus::Ok, "next lỗi bất thường: {r:?}"),
+        }
+        let stop = shim::ble_watch_stop();
+        assert_eq!(stop.status, ShimStatus::Ok);
+    } else {
+        let stop = shim::ble_watch_stop();
+        assert_eq!(stop.status, ShimStatus::NotInitialized);
     }
-    let stop = shim::ble_watch_stop();
-    assert_eq!(stop.status, ShimStatus::Ok);
 }
 
 #[test]

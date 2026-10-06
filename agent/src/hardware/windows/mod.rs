@@ -1,3 +1,4 @@
+pub mod cfgmgr_pnp;
 pub mod sysinfo_fallback;
 pub mod wmi_collector;
 pub mod wmi_dto;

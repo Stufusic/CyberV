@@ -15,7 +15,33 @@ pub const IOCTL_CYBERV_GET_PCI_INFO: u32 = 0x80006000;
 pub const IOCTL_CYBERV_GET_TOPOLOGY: u32 = 0x80006004;
 pub const IOCTL_CYBERV_REGISTER_PROTECTED_PID: u32 = 0x8000E008;
 pub const IOCTL_CYBERV_GET_SHIELD_TELEMETRY: u32 = 0x8000600C;
+pub const CYBERV_ABI_MAGIC: u32 = 0x56594243;
 pub const CYBERV_ABI_VERSION: u32 = 1;
+
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CybervAbiHeader {
+    pub magic: u32,
+    pub abi_version: u32,
+    pub header_size: u32,
+    pub total_payload_size: u32,
+    pub flags: u32,
+    pub reserved: [u32; 4],
+}
+
+impl Default for CybervAbiHeader {
+    fn default() -> Self {
+        Self {
+            magic: CYBERV_ABI_MAGIC,
+            abi_version: CYBERV_ABI_VERSION,
+            header_size: std::mem::size_of::<CybervAbiHeader>() as u32,
+            total_payload_size: std::mem::size_of::<CybervAbiHeader>() as u32,
+            flags: 0,
+            reserved: [0; 4],
+        }
+    }
+}
+
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KernelPciDevice {

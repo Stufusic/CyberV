@@ -13,6 +13,12 @@ use crate::security::assurance::AssuranceLevel;
 use crate::security::freshness::EvidenceMetadata;
 use serde::{Deserialize, Serialize};
 
+pub use crate::evidence::unified::{
+    EvidenceSourceWeight, HardwareEvidenceState, MAX_CONFIDENCE_KERNEL_BUS,
+    MAX_CONFIDENCE_MESH_QUORUM, MAX_CONFIDENCE_STORAGE_PNP, MAX_CONFIDENCE_TPM_QUOTE,
+    MAX_CONFIDENCE_USER_WMI,
+};
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PolicyDecision {
     /// Cho phép truy cập bình thường (Trust verified)
@@ -32,6 +38,11 @@ pub struct PolicyConfig {
     pub step_up_threshold: u32, // Mặc định: 5000
     pub minimum_assurance: AssuranceLevel,
     pub half_life_secs: u64,
+    /// H5: metadata `None` = KHÔNG đo được độ tươi ⟹ KHÔNG được hưởng full
+    /// trust — áp decay cố định về mức này (per-10000). 7000 = cut 30%: vẫn
+    /// trên step-up (5000) để các luồng phi-Allow chạy được, nhưng Allow
+    /// (≥8000) bắt buộc phải có metadata freshness đo được.
+    pub none_metadata_confidence: u16,
 }
 
 impl Default for PolicyConfig {
@@ -41,6 +52,7 @@ impl Default for PolicyConfig {
             step_up_threshold: 5000,
             minimum_assurance: AssuranceLevel::OSProtected,
             half_life_secs: 86400, // 24 giờ
+            none_metadata_confidence: 7000,
         }
     }
 }
@@ -53,7 +65,10 @@ pub struct PolicyEvaluationReport {
     pub freshness_confidence: u16,
     pub rationales: Vec<String>,
     pub evaluated_at: u64,
+    #[serde(default)]
+    pub evidence_state: HardwareEvidenceState,
 }
+
 
 pub struct SecurityPolicyEngine;
 
@@ -88,8 +103,10 @@ impl SecurityPolicyEngine {
                 freshness_confidence: 0,
                 rationales,
                 evaluated_at: now,
+                evidence_state: HardwareEvidenceState::Conflicted,
             };
         }
+
 
         // 2. Tính toán điểm số dung hợp số nguyên (Weighted Integer Fusion - 0 đến 10000):
         // TPM / Hardware Identity: 25% (2500)
@@ -109,15 +126,25 @@ impl SecurityPolicyEngine {
         let achieved_assurance = enclave_report.assurance_level;
 
         // 4. Đánh giá Độ tươi (Freshness) và Suy giảm độ tin cậy (Half-Life Decay)
-        let mut freshness_confidence = 10000u16;
-        if let Some(meta) = metadata {
-            freshness_confidence = meta.effective_confidence(now, config.half_life_secs);
-            if !meta.is_fresh(now) {
-                rationales.push("Bằng chứng đã quá thời hạn hiệu lực (Expired)".to_string());
-            } else if freshness_confidence < 5000 {
+        // H5: metadata `None` = không đo được độ tươi ⟹ decay cố định —
+        // fail-closed (trước đây mặc định 10000 = tin tưởng vô điều kiện).
+        let mut freshness_confidence = config.none_metadata_confidence;
+        match metadata {
+            Some(meta) => {
+                freshness_confidence = meta.effective_confidence(now, config.half_life_secs);
+                if !meta.is_fresh(now) {
+                    rationales.push("Bằng chứng đã quá thời hạn hiệu lực (Expired)".to_string());
+                } else if freshness_confidence < 5000 {
+                    rationales.push(format!(
+                        "Độ tin cậy bằng chứng suy giảm do thời gian: {}/10000",
+                        freshness_confidence
+                    ));
+                }
+            }
+            None => {
                 rationales.push(format!(
-                    "Độ tin cậy bằng chứng suy giảm do thời gian: {}/10000",
-                    freshness_confidence
+                    "Metadata freshness không khả dụng — áp decay cố định (H5): {}/10000",
+                    config.none_metadata_confidence
                 ));
             }
         }
@@ -172,6 +199,22 @@ impl SecurityPolicyEngine {
             PolicyDecision::Allow
         };
 
+        let evidence_state = if matches!(decision, PolicyDecision::Isolate { .. }) {
+            if composite_score == 0 && (!kernel_report.telemetry.is_shield_active || kernel_report.defense_score <= 3000) {
+                HardwareEvidenceState::Conflicted
+            } else {
+                HardwareEvidenceState::Unknown
+            }
+        } else if achieved_assurance == AssuranceLevel::Software {
+            HardwareEvidenceState::Virtual
+        } else if tpm_score >= 8000 && kernel_report.defense_score >= 8000 && dma_report.dma_security_score >= 8000 {
+            HardwareEvidenceState::Physical
+        } else if tpm_score == 0 || kernel_report.defense_score == 0 {
+            HardwareEvidenceState::Unknown
+        } else {
+            HardwareEvidenceState::Physical
+        };
+
         PolicyEvaluationReport {
             decision,
             composite_score,
@@ -179,7 +222,75 @@ impl SecurityPolicyEngine {
             freshness_confidence,
             rationales,
             evaluated_at: now,
+            evidence_state,
         }
+    }
+
+    /// Đánh giá chính sách an ninh mở rộng kết hợp với báo cáo Cross-Layer Validator và 5-State Taxonomy
+    #[allow(clippy::too_many_arguments)]
+    pub fn evaluate_with_cross_layer(
+        config: &PolicyConfig,
+        tpm_score: u32,
+        kernel_report: &AntiTamperReport,
+        dma_report: &DmaSecurityReport,
+        firmware_report: &FirmwareSecurityReport,
+        enclave_report: &EnclaveAttestationReport,
+        cross_layer: Option<&crate::kernel::CrossLayerValidationReport>,
+        metadata: Option<&EvidenceMetadata>,
+        now: u64,
+    ) -> PolicyEvaluationReport {
+        if let Some(cl) = cross_layer {
+            if matches!(cl.status, crate::kernel::ValidationStatus::Contradictory { .. }) {
+                let mut rationales = Vec::new();
+                rationales.push(format!(
+                    "Mâu thuẫn chéo nghiêm trọng giữa WMI và Kernel Probe: {}",
+                    cl.description
+                ));
+                return PolicyEvaluationReport {
+                    decision: PolicyDecision::Isolate {
+                        reason: "Hardware Evidence Conflicted (Cross-Layer Contradiction Detected)".to_string(),
+                        severity: 10000,
+                    },
+                    composite_score: 0,
+                    achieved_assurance: AssuranceLevel::Unknown,
+                    freshness_confidence: 0,
+                    rationales,
+                    evaluated_at: now,
+                    evidence_state: HardwareEvidenceState::Conflicted,
+                };
+            }
+        }
+
+        let mut report = Self::evaluate(
+            config,
+            tpm_score,
+            kernel_report,
+            dma_report,
+            firmware_report,
+            enclave_report,
+            metadata,
+            now,
+        );
+
+        if let Some(cl) = cross_layer {
+            match cl.status {
+                crate::kernel::ValidationStatus::Consistent => {
+                    report.evidence_state = HardwareEvidenceState::Physical;
+                }
+                crate::kernel::ValidationStatus::Unknown
+                    if report.evidence_state == HardwareEvidenceState::Physical
+                        && !cl.is_hardware_verified =>
+                {
+                    report.rationales.push(
+                        "Cross-layer validation ở trạng thái Unknown: bảo toàn baseline không nâng cấp hardware-verified".to_string(),
+                    );
+                }
+                _ => {}
+
+            }
+        }
+
+        report
     }
 
     /// Đánh giá chính sách an ninh cục bộ tự trị khi Offline hoặc Worker bị cô lập (Phase 24.2 per Docs/rv15.md Section 13)
@@ -205,6 +316,7 @@ impl SecurityPolicyEngine {
                 freshness_confidence: 0,
                 rationales,
                 evaluated_at: now,
+                evidence_state: HardwareEvidenceState::Conflicted,
             };
         }
 
@@ -222,6 +334,7 @@ impl SecurityPolicyEngine {
                 freshness_confidence: 5000,
                 rationales,
                 evaluated_at: now,
+                evidence_state: HardwareEvidenceState::Conflicted,
             };
         }
 
@@ -242,6 +355,7 @@ impl SecurityPolicyEngine {
                     freshness_confidence: 6000,
                     rationales,
                     evaluated_at: now,
+                    evidence_state: HardwareEvidenceState::Conflicted,
                 };
             }
         }
@@ -273,6 +387,12 @@ impl SecurityPolicyEngine {
             PolicyDecision::Allow
         };
 
+        let evidence_state = if matches!(decision, PolicyDecision::Isolate { .. }) {
+            HardwareEvidenceState::Conflicted
+        } else {
+            HardwareEvidenceState::Physical
+        };
+
         PolicyEvaluationReport {
             decision,
             composite_score: composite,
@@ -280,6 +400,8 @@ impl SecurityPolicyEngine {
             freshness_confidence: passive_report.freshness,
             rationales,
             evaluated_at: now,
+            evidence_state,
         }
     }
 }
+

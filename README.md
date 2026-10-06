@@ -39,13 +39,13 @@
 | Sửa một module cụ thể | [`Docs/CONTEXT_MAP.md`](Docs/CONTEXT_MAP.md) → README của module đó *(M-D2)* |
 | Biết bất biến an ninh nào chi phối code mình sắp sửa | [`Docs/INVARIANTS.md`](Docs/INVARIANTS.md) |
 | Là AI assistant / onboarding quy ước | [`AGENTS.md`](AGENTS.md) |
-| Spec wire format (IOCTL ABI, IPC frame, chữ ký) | [`Docs/API_PROTOCOLS.md`](Docs/API_PROTOCOLS.md) *(M-D1)* |
-| Vận hành / xử lý sự cố / quản lý key | [`Docs/OPERATIONS.md`](Docs/OPERATIONS.md) + [`Docs/KEY_MANAGEMENT.md`](Docs/KEY_MANAGEMENT.md) *(M-D3)* |
+| Spec wire format (IOCTL ABI, IPC frame, chữ ký) | [`Docs/API_PROTOCOLS.md`](Docs/API_PROTOCOLS.md) |
+| Vận hành / xử lý sự cố / quản lý key | [`Docs/OPERATIONS.md`](Docs/OPERATIONS.md) + [`Docs/KEY_MANAGEMENT.md`](Docs/KEY_MANAGEMENT.md) |
 | Đánh giá rủi ro an ninh từng mối đe dọa | [`Docs/THREAT_MODEL.md`](Docs/THREAT_MODEL.md) |
 | Lộ trình phát triển & ký số | [`Docs/PHASE1_2_IMPLEMENTATION_PLAN.md`](Docs/PHASE1_2_IMPLEMENTATION_PLAN.md) + [`Docs/PIPELINE_SECURITY_PLAN.md`](Docs/PIPELINE_SECURITY_PLAN.md) + [`Docs/DRIVER_SIGNING_RUNBOOK.md`](Docs/DRIVER_SIGNING_RUNBOOK.md) |
-| Quy tắc đóng góp / báo cáo lỗ hổng | [`SECURITY.md`](SECURITY.md) + [`CONTRIBUTING.md`](CONTRIBUTING.md) *(M-D3)* |
+| Quy tắc đóng góp / báo cáo lỗ hổng | [`SECURITY.md`](SECURITY.md) + [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 
-*(mục *(M-Dx)* đang theo `Docs/DOCUMENTATION_PLAN.md` — tạo trong các cột mốc tiếp theo)*
+*(M-D1..D3 đã tạo: ARCHITECTURE, API_PROTOCOLS, OPERATIONS, KEY_MANAGEMENT, CONTRIBUTING — 2026-10-05)*
 
 ---
 

@@ -6,7 +6,9 @@
 // Standardized ABI contract between Ring-0 Driver and Ring-3 Agent
 
 #define FILE_DEVICE_CYBERV 0x8000
+#define CYBERV_ABI_MAGIC 0x56594243
 #define CYBERV_ABI_VERSION 1
+
 
 // IOCTL Codes:
 // IOCTL_CYBERV_GET_PCI_INFO:           0x80006000 (METHOD_BUFFERED, FILE_READ_DATA)
@@ -26,6 +28,15 @@
     CTL_CODE(FILE_DEVICE_CYBERV, 0x803, METHOD_BUFFERED, FILE_READ_DATA)
 
 #pragma pack(push, 1)
+
+typedef struct _CYBERV_ABI_HEADER {
+    unsigned int Magic;            // CYBERV_ABI_MAGIC
+    unsigned int AbiVersion;       // CYBERV_ABI_VERSION
+    unsigned int HeaderSize;       // sizeof(CYBERV_ABI_HEADER)
+    unsigned int TotalPayloadSize; // Toan bo kich thuoc payload IOCTL
+    unsigned int Flags;            // Co tinh nang mo rong
+    unsigned int Reserved[4];      // Du phong tuong thich tuong lai (phai bang 0)
+} CYBERV_ABI_HEADER, *PCYBERV_ABI_HEADER;
 
 typedef struct _CYBERV_PCI_DEVICE {
     unsigned short VendorId;

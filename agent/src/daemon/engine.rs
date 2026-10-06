@@ -17,6 +17,7 @@ use crate::protocol::constants::PURPOSE_DEVICE_AUTH;
 use crate::protocol::enroll::create_enrollment_request;
 use crate::protocol::reenroll::create_reenrollment_request;
 use crate::transport::error::TransportError;
+use crate::trust::tpm::{DEFAULT_CYBERV_NV_INDEX, TpmAssuranceType, TpmNvCounter};
 use crate::transport::models::{
     ComponentDiffDto, EnrollResponseDto, KeyRotationResponseDto, ReenrollResponseDto,
     VerifyStateResponseDto,
@@ -55,6 +56,17 @@ pub struct AgentDaemon<T: DeviceTransport, C: HardwareCollector> {
     current_graph: Option<DeviceEvidenceGraph>,
     current_graph_version: u32,
     current_state_hash: Option<String>,
+    // ---- P2-1b: TPM NV counter anti-rollback guard ------------------------
+    /// None = chưa wire (snapshot báo NOT_WIRED trung thực).
+    nv_counter: Option<Box<dyn TpmNvCounter>>,
+    nv_index: u32,
+    /// Giá trị counter lần đọc gần nhất — rollback = giá trị mới NHỎ HƠN.
+    last_counter: Option<u64>,
+    /// NOT_WIRED / OK / READ_ERROR: ... / PROVISION_ERROR: ... / ROLLBACK_DETECTED
+    tpm_counter_status: String,
+    rollback_detected: bool,
+    /// Neo thời gian monotonic (Instant) chống thao túng đồng hồ hệ thống (Gate 2 / INV-006).
+    last_success_mono: Option<std::time::Instant>,
 }
 
 impl<T: DeviceTransport, C: HardwareCollector> AgentDaemon<T, C> {
@@ -76,7 +88,82 @@ impl<T: DeviceTransport, C: HardwareCollector> AgentDaemon<T, C> {
             current_graph: None,
             current_graph_version: 1,
             current_state_hash: None,
+            nv_counter: None,
+            nv_index: DEFAULT_CYBERV_NV_INDEX,
+            last_counter: None,
+            tpm_counter_status: "NOT_WIRED".to_string(),
+            rollback_detected: false,
+            last_success_mono: None,
         }
+    }
+
+    /// P2-1b: gắn TPM NV counter guard (WindowsTbsNvCounter — TBS thật khi
+    /// được phép, fallback phần mềm trung thực theo assurance). NV index mặc
+    /// định `DEFAULT_CYBERV_NV_INDEX`.
+    pub fn with_nv_counter(
+        mut self,
+        counter: Box<dyn TpmNvCounter>,
+        nv_index: u32,
+    ) -> Self {
+        self.nv_counter = Some(counter);
+        self.nv_index = nv_index;
+        self
+    }
+
+    /// Đọc counter + phát hiện rollback. Trung thực (INV-002): lỗi đọc /
+    /// không wire KHÔNG được coi là rollback — Unknown ≠ bằng chứng tấn công.
+    /// Rollback thật (giá trị NHỎ hơn lần đọc trước) ⟹ true, INV-006 lockdown.
+    fn check_rollback(&mut self) -> bool {
+        let Some(counter) = self.nv_counter.as_mut() else {
+            self.tpm_counter_status = "NOT_WIRED".to_string();
+            return false;
+        };
+        // Lần đầu: discover_or_provision (idempotent — có sẵn thì chỉ khám phá).
+        if self.last_counter.is_none() {
+            match counter.discover_or_provision(self.nv_index, 0) {
+                Ok(_) => {}
+                Err(e) => {
+                    self.tpm_counter_status = format!("PROVISION_ERROR: {e}");
+                    return false;
+                }
+            }
+        }
+        match counter.read_counter(self.nv_index) {
+            Ok(v) => match self.last_counter {
+                Some(last) if v < last => {
+                    self.rollback_detected = true;
+                    self.tpm_counter_status =
+                        format!("ROLLBACK_DETECTED: counter {v} < lần đọc trước {last}");
+                    true
+                }
+                _ => {
+                    // Counter đơn điệu — giá trị mới >= cũ luôn chấp nhận.
+                    self.last_counter = Some(v);
+                    self.tpm_counter_status = "OK".to_string();
+                    false
+                }
+            },
+            Err(e) => {
+                self.tpm_counter_status = format!("READ_ERROR: {e}");
+                false
+            }
+        }
+    }
+
+    pub fn tpm_counter_status(&self) -> &str {
+        &self.tpm_counter_status
+    }
+
+    pub fn tpm_rollback_detected(&self) -> bool {
+        self.rollback_detected
+    }
+
+    pub fn tpm_last_counter(&self) -> Option<u64> {
+        self.last_counter
+    }
+
+    pub fn tpm_assurance(&self) -> Option<TpmAssuranceType> {
+        self.nv_counter.as_ref().map(|c| c.get_assurance_type())
     }
 
     pub fn with_config(mut self, config: DaemonConfig) -> Self {
@@ -200,6 +287,7 @@ impl<T: DeviceTransport, C: HardwareCollector> AgentDaemon<T, C> {
             .await?;
 
         if verify_resp.authenticated && verify_resp.status == "AUTHENTICATED" {
+            self.last_success_mono = Some(std::time::Instant::now());
             if let AgentState::Active {
                 ref mut last_attested_at,
                 ..
@@ -350,6 +438,14 @@ impl<T: DeviceTransport, C: HardwareCollector> AgentDaemon<T, C> {
 
     /// Một nhịp kiểm tra tự hành (Single Tick) của Daemon
     pub async fn tick(&mut self) -> Result<AgentState, TransportError> {
+        // P2-1b / INV-006: rollback TPM phát hiện ⟹ khóa lập tức, fail-closed
+        // TRƯỚC mọi attestation — snapshot bị tua không được attest như bình thường.
+        if self.check_rollback() {
+            self.state = AgentState::SuspendedOrRejected {
+                reason: self.tpm_counter_status.clone(),
+            };
+            return Ok(self.state.clone());
+        }
         match self.state.clone() {
             AgentState::Unregistered => {
                 self.enroll().await?;
@@ -387,6 +483,9 @@ impl<T: DeviceTransport, C: HardwareCollector> AgentDaemon<T, C> {
                         Ok(_) => Ok(self.state.clone()),
                         Err(err) => match err {
                             TransportError::NetworkFailure(_) | TransportError::Timeout => {
+                                if self.last_success_mono.is_none() {
+                                    self.last_success_mono = Some(std::time::Instant::now());
+                                }
                                 self.state = AgentState::OfflineGracePeriod {
                                     consecutive_failures: 1,
                                     last_success_at: now_secs(),
@@ -468,6 +567,7 @@ impl<T: DeviceTransport, C: HardwareCollector> AgentDaemon<T, C> {
                 // hoặc status lạ tuyệt đối không được tính là attestation thành công.
                 match self.attest_step().await {
                     Ok(resp) if resp.authenticated && resp.status == "AUTHENTICATED" => {
+                        self.last_success_mono = Some(std::time::Instant::now());
                         self.state = AgentState::Active {
                             graph_version: self.current_graph_version,
                             state_hash: self.current_state_hash.clone().unwrap_or_default(),
@@ -478,8 +578,13 @@ impl<T: DeviceTransport, C: HardwareCollector> AgentDaemon<T, C> {
                     Ok(resp) => {
                         // Server phản hồi hợp lệ nhưng từ chối xác thực: giữ nguyên
                         // grace period (fail-closed), không bao giờ tự phục hồi trạng thái.
-                        let elapsed = now_secs().saturating_sub(last_success_at);
-                        if elapsed > self.config.max_offline_grace_secs {
+                        let mono_elapsed = self.last_success_mono.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+                        let wall_elapsed = now_secs().saturating_sub(last_success_at);
+                        if now_secs() < last_success_at {
+                            tracing::warn!("Cảnh báo an ninh: Phát hiện đồng hồ hệ thống bị tua ngược (Clock Tampering)");
+                        }
+                        let elapsed = mono_elapsed.max(wall_elapsed);
+                        if elapsed >= self.config.max_offline_grace_secs {
                             self.state = AgentState::SuspendedOrRejected {
                                 reason: format!(
                                     "Offline grace period expired (server verdict: {})",
@@ -495,8 +600,13 @@ impl<T: DeviceTransport, C: HardwareCollector> AgentDaemon<T, C> {
                         Ok(self.state.clone())
                     }
                     Err(err) => {
-                        let elapsed = now_secs().saturating_sub(last_success_at);
-                        if elapsed > self.config.max_offline_grace_secs {
+                        let mono_elapsed = self.last_success_mono.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+                        let wall_elapsed = now_secs().saturating_sub(last_success_at);
+                        if now_secs() < last_success_at {
+                            tracing::warn!("Cảnh báo an ninh: Phát hiện đồng hồ hệ thống bị tua ngược (Clock Tampering)");
+                        }
+                        let elapsed = mono_elapsed.max(wall_elapsed);
+                        if elapsed >= self.config.max_offline_grace_secs {
                             self.state = AgentState::SuspendedOrRejected {
                                 reason: "Offline grace period expired".to_string(),
                             };

@@ -272,8 +272,10 @@ fn test_07_weighted_integer_fusion_proportions() {
         &config, tpm_score, &kernel, &dma, &fw, &enclave, None, 1000,
     );
 
-    // All are 10000, so composite must be exactly 10000
-    assert_eq!(report.composite_score, 10000);
+    // H5: metadata None = không đo được độ tươi ⟹ decay cố định 7000/10000
+    // (composite 10000 × 7000/10000) — không còn full-trust khi thiếu metadata.
+    assert_eq!(report.composite_score, 7000);
+    assert_eq!(report.freshness_confidence, 7000);
 }
 
 #[test]
@@ -344,7 +346,8 @@ fn test_12_policy_rationales_tracking() {
         &config, tpm_score, &kernel, &dma, &fw, &enclave, None, 1000,
     );
     assert!(!report.rationales.is_empty());
-    assert!(report.rationales[0].contains("đạt chuẩn"));
+    // H5: rationale đầu tiên phải ghi nhận decay do thiếu metadata freshness.
+    assert!(report.rationales[0].contains("decay cố định (H5)"), "rationales: {:?}", report.rationales);
 }
 
 #[test]
