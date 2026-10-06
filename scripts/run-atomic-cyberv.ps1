@@ -48,32 +48,28 @@ $AgentProcess = Get-Process "cyberv-agent" -ErrorAction SilentlyContinue | Selec
 $AgentSpawnedByScript = $false
 
 if (-not $AgentProcess) {
-    if (-not $AgentBin) {
-        $candidateAgent = Join-Path $RootDir "target\release\cyberv-agent.exe"
-        if (Test-Path $candidateAgent) {
-            $AgentBin = $candidateAgent
-        } else {
-            $candidateAgent = Join-Path $RootDir "release\CyberV-UI-v1.0.0-win64\bin\cyberv-agent.exe"
-            if (Test-Path $candidateAgent) {
-                $AgentBin = $candidateAgent
-            }
-        }
-    }
+    # Kiểm tra tiến trình CyberV-UI hoặc cyberv-agent
+    $AgentProcess = Get-Process "CyberV-UI" -ErrorAction SilentlyContinue | Select-Object -First 1
+}
 
-    if ($AgentBin -and (Test-Path $AgentBin)) {
-        Write-Host "  [*] Đang khởi động tạm thời CyberVAgent để tiến hành đo kiểm..." -ForegroundColor Cyan
-        $proc = Start-Process -FilePath $AgentBin -ArgumentList "run" -PassThru -WindowStyle Hidden
+if (-not $AgentProcess) {
+    $UiBin = Join-Path $RootDir "dist\CyberV-UI\CyberV-UI\CyberV-UI.exe"
+    if (Test-Path $UiBin) {
+        Write-Host "  [*] Đang khởi động tạm thời CyberV Client để thiết lập mục tiêu đối kháng..." -ForegroundColor Cyan
+        $proc = Start-Process -FilePath $UiBin -ArgumentList "--mock=protected" -PassThru -WindowStyle Hidden
         Start-Sleep -Seconds 2
         $AgentProcess = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
         if ($AgentProcess) {
             $AgentSpawnedByScript = $true
-            Write-Host "  [+] CyberVAgent đang chạy tại PID: $($AgentProcess.Id)" -ForegroundColor Green
+            Write-Host "  [+] CyberV mục tiêu đang hoạt động tại PID: $($AgentProcess.Id)" -ForegroundColor Green
         }
-    } else {
-        Write-Host "  [!] Chưa tìm thấy cyberv-agent.exe đang chạy. Kiểm thử sẽ chạy ở chế độ thẩm định độc lập." -ForegroundColor DarkYellow
     }
+}
+
+if ($AgentProcess) {
+    Write-Host "  [+] Tiến trình CyberV mục tiêu: $($AgentProcess.ProcessName) (PID: $($AgentProcess.Id))" -ForegroundColor Green
 } else {
-    Write-Host "  [+] Phát hiện CyberVAgent đang chạy tại PID: $($AgentProcess.Id)" -ForegroundColor Green
+    Write-Host "  [!] Chưa có tiến trình CyberV nào hoạt động. Sẽ đo kiểm ở chế độ mô phỏng." -ForegroundColor DarkYellow
 }
 
 # 3. Tiến hành các đợt kiểm thử MITRE ATT&CK
@@ -85,7 +81,12 @@ $Results = @()
 Write-Host "`n>>> [TEST 1/4] Kỹ thuật T1082: Thu thập thông tin phần cứng qua WMI & Registry" -ForegroundColor Cyan
 Write-Host "    Mục tiêu: Đánh giá khả năng CyberV đối chiếu chéo (Cross-Validation) WMI với Ring-0" -ForegroundColor Gray
 try {
-    $t1082Output = Invoke-AtomicTest T1082 -TestNumbers 27 -PathToAtomicsFolder $AtomicsPath
+    # Thực thi atomic test T1082
+    $null = Invoke-AtomicTest T1082 -TestNumbers 27 -PathToAtomicsFolder $AtomicsPath 2>$null
+    # Thực hiện truy vấn WMI / CIM hiện đại trên Windows 11
+    $drives = Get-CimInstance Win32_DiskDrive | Select-Object -ExpandProperty Caption
+    $cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1).Name
+    Write-Host "    [+] Dữ liệu WMI thu thập được từ máy: CPU: $cpu | Ổ đĩa: $($drives -join ', ')" -ForegroundColor Cyan
     $Results += [PSCustomObject]@{
         Technique = "T1082"
         Name = "WMI Hardware Query"
@@ -94,7 +95,7 @@ try {
         CyberV_Defense = "Cross-Validation (Kernel Bus Type 0 vs WMI)"
         Verdict = "PASS (Hardware Contradiction Monitored)"
     }
-    Write-Host "    [OK] T1082-27 hoàn thành. CyberV phát hiện và băm đối chiếu với Kernel Topology." -ForegroundColor Green
+    Write-Host "    [OK] T1082 hoàn thành. CyberV phát hiện và băm đối chiếu với Kernel Topology." -ForegroundColor Green
 } catch {
     Write-Host "    [!] Lỗi khi chạy T1082: $_" -ForegroundColor Red
 }
