@@ -42,6 +42,19 @@ Thêm ngôn ngữ = thêm 1 biên giới FFI phải bảo trì mãi.
 - Mỗi hàm shim có 1 test biên giới (Rust gọi vào, assert hành vi + lỗi).
 - cargo-deny/machete: shim không thêm crate nào.
 
+**Rationale shim hiện hữu (M-PLAN M-3/M-4, 2026-10-05)** — đúng ngoại lệ
+§1.1(a) "WinRT API mà Rust painful": `agent/shim/cyberv_shim_winrt.cpp`
+transliterate `WiFiDirectAdvertisementPublisher` + `WiFiDirectConnectionListener`
++ `WiFiDirectDevice` (Tier B) và `BluetoothLEAdvertisementPublisher/Watcher`
+(Tier C). Data path WFD là TCP thuần trên endpoint WinRT cấp — toàn bộ logic
+mesh (framing/AEAD/handshake/graph) nằm Rust. Build qua `cc` trong
+`agent/build.rs` (cc đã có trong Cargo.lock — không crate mới); môi trường
+không có Windows SDK → shim STUB trả UNSUPPORTED trung thực. Giới hạn đã ghi
+rõ: Windows.winmd của SDK cài tại máy thiếu `WiFiDirectAdvertisementWatcher`
+(không có browse chủ động) — connect dùng device_id đã pin enrollment; bổ
+sung Watcher khi có contract winmd đầy đủ. Test biên giới: mỗi hàm shim 1
+test (`mesh_shim_boundary_tests.rs`).
+
 ### 1.2 Chống churn — "tối ưu" không phải lý do
 
 Số đo NSG-3.5 (plan §11.1): quorum ~2µs, AEAD seal+open ~3µs, ingest

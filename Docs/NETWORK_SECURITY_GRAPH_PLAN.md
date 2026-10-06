@@ -659,6 +659,13 @@ nhân quả trực tiếp && không cùng causal parent && path khác.
 |---|---|---|
 | `mdns-sd` | 0.21 | Crate **duy nhất** của M-series. Pure-Rust, không phụ thuộc async runtime (flume), đúng vai trò discovery Tier A (plan §10: "mDNS discovery + TCP"). Beacon đi qua TXT dạng hex — decode bounds nghiêm ngặt; peer qua mDNS chỉ vào `Discovered` (presence ≠ trust, INV-012); attest phải qua bắt tay chữ ký thật. Không crate BLE/WiFi-Direct nào được thêm ở giai đoạn này — M-3 dùng shim C++ có sẵn, M-4 quyết định thư viện tại lúc làm |
 
+**M-3/M-4 (2026-10-05):** không thêm crate Rust nào. Shim C++ WinRT build
+qua `cc` crate trong `agent/build.rs` — `cc` ĐÃ có sẵn trong Cargo.lock
+(transitive), ghi rationale ở HYBRID §1.1. BLE Tier C chọn WinRT shim thay
+`btleplug`: cùng biên giới extern-C đã test, không thêm FFI crate, không crate
+mới trong lock. Company ID BLE 0xFFFF (Bluetooth SIG dành cho internal/test) —
+sản phẩm thương mại cần ID đăng ký riêng.
+
 Trung thực: `cargo-machete`/`cargo-deny` **chưa cài trên máy dev** — không
 chạy được local; job CI dependency-check phải xanh trước merge. Rationale ghi
 tại đây theo đúng cấm danh sách #6.

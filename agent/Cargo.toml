@@ -68,6 +68,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 wmi = "0.18.4"
 
+[build-dependencies]
+# Shim WinRT (M-3 WiFi Direct / M-4 BLE) qua build.rs — HYBRID §1.1. `cc` ĐÃ
+# có trong Cargo.lock (transitive) — không thêm crate mới vào lock.
+cc = "1"
+
 [dev-dependencies]
 tempfile = "3.10"
 # Client-side handshake cho ipc_session_tests (cùng crate với main deps)

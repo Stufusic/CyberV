@@ -17,8 +17,11 @@
 //!    đường) — session/link thật thuộc sở hữu connection task trong `node.rs`
 //!    để không phải chia sẻ &mut qua lock khi I/O.
 
+pub mod ble;
 pub mod mdns;
+pub mod shim;
 pub mod tcp;
+pub mod wfd;
 
 use std::collections::HashMap;
 use std::future::Future;

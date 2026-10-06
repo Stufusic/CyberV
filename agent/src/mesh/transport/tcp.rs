@@ -16,7 +16,7 @@ use tokio::time::timeout;
 
 use super::super::discovery::MeshBeacon;
 use super::super::MeshError;
-use super::{tcp_path_class, ConnectFuture, Endpoint, InboundLinks, MeshLink, MeshTransport, TransportId};
+use super::{ConnectFuture, Endpoint, InboundLinks, MeshLink, MeshTransport, TransportId};
 
 /// Trần đọc kinh điển mỗi lần đợi socket — buffer nội bộ gom cho đủ frame.
 const READ_CHUNK: usize = 8 * 1024;
@@ -153,7 +153,14 @@ pub struct TcpLink {
 
 impl TcpLink {
     pub fn new(stream: TcpStream, peer: SocketAddr) -> Self {
-        let class = tcp_path_class(peer.ip());
+        Self::new_with_transport(stream, peer, TransportId::TcpLan)
+    }
+
+    /// Link TCP cho dữ liệu chạy trên carrier khác (WFD — M-3): socket là
+    /// TCP thuần nhưng path_class theo transport thật ⇒ quorum thấy đa dạng
+    /// đường (plan §10 Tier B).
+    pub fn new_with_transport(stream: TcpStream, peer: SocketAddr, transport: TransportId) -> Self {
+        let class = super::path_class(transport, super::subnet_scope(peer.ip()));
         Self { stream, peer, class, rx_buf: Vec::new(), rx_frame_len: None }
     }
 }
@@ -233,6 +240,7 @@ impl MeshLink for TcpLink {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::tcp_path_class;
 
     async fn linked_pair() -> (TcpLink, TcpLink) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
