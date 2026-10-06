@@ -49,9 +49,10 @@ if (Test-Path $KeygenExe) {
 }
 
 # 4. Copy management scripts
-Write-Host "[4/6] Sao chép các kịch bản quản trị dịch vụ..." -ForegroundColor Yellow
+Write-Host "[4/6] Sao chép các kịch bản quản trị dịch vụ và thiết lập..." -ForegroundColor Yellow
 Copy-Item (Join-Path $RootDir "scripts\install-agent-service.ps1") -Destination $ScriptsDir -Force
 Copy-Item (Join-Path $RootDir "scripts\uninstall-agent-service.ps1") -Destination $ScriptsDir -Force
+Copy-Item (Join-Path $RootDir "scripts\setup-env.ps1") -Destination $ScriptsDir -Force
 
 # 5. Create user documentation & checksums
 Write-Host "[5/6] Tạo tài liệu hướng dẫn sử dụng và mã băm SHA-256..." -ForegroundColor Yellow
@@ -113,7 +114,19 @@ Cách 2 (Qua PowerShell với quyền Administrator):
     powershell -ExecutionPolicy Bypass -File .\uninstall-agent-service.ps1
 
 --------------------------------------------------------------------------------
-4. BẢO MẬT VÀ NGUYÊN TẮC FAIL-CLOSED
+4. DÀNH CHO LẬP TRÌNH VIÊN: THIẾT LẬP MÔI TRƯỜNG TỰ ĐỘNG (PYTHON, RUST, C/C++)
+--------------------------------------------------------------------------------
+Nếu bạn muốn tham gia phát triển, biên dịch từ mã nguồn hoặc chạy kiểm thử:
+- Mở PowerShell và chạy script tự động kiểm tra môi trường:
+    powershell -ExecutionPolicy Bypass -File .\scripts\setup-env.ps1
+- Script sẽ tự động quét:
+  * Python (3.10+) & các thư viện (PySide6, cryptography, pytest, pyinstaller)
+  * Rust Toolchain (cargo, rustc, clippy, rustfmt)
+  * C/C++ Build Tools (MSVC Compiler & Linker)
+  Nếu phát hiện thiếu bất kỳ công cụ nào, script sẽ tự động tải về và cài đặt!
+
+--------------------------------------------------------------------------------
+5. BẢO MẬT VÀ NGUYÊN TẮC FAIL-CLOSED
 --------------------------------------------------------------------------------
 - Hệ thống áp dụng nguyên tắc Fail-Closed: Tuyệt đối không giả mạo kết quả xác thực.
 - Nếu máy tính không có chip TPM 2.0 hoặc probe phần cứng không đọc được, hệ thống
@@ -122,7 +135,7 @@ Cách 2 (Qua PowerShell với quyền Administrator):
   bộ nhớ RAM khi hoàn tất chu trình.
 
 --------------------------------------------------------------------------------
-5. HỖ TRỢ VÀ ĐÓNG GÓP
+6. HỖ TRỢ VÀ ĐÓNG GÓP
 --------------------------------------------------------------------------------
 - Mã nguồn chính thức: https://github.com/Stufusic/CyberV
 - Báo cáo lỗi / Liên hệ: Xem tệp SECURITY.md trên repository GitHub.
