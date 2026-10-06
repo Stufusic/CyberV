@@ -209,12 +209,19 @@ Nếu bạn chỉ muốn đánh giá an ninh thiết bị, kiểm tra phần c�
 
 Nếu bạn muốn đóng góp mã nguồn, kiểm toán thuật toán hoặc tự đóng gói hệ thống:
 
-#### 1. Tiền đề môi trường (Prerequisites)
-* **Hệ điều hành**: Windows 10 (1909+ 64-bit), Windows 11 (64-bit).
-* **Python**: 3.10+ (Khuyến nghị 3.11 hoặc 3.13) kèm `pip`.
-* **Rust**: 1.75+ Stable (`x86_64-pc-windows-msvc`).
-* **Visual Studio 2022**: Workload *"Desktop development with C++"* kèm Windows SDK (nếu muốn build Driver).
-* **Node.js**: LTS 18+ & npm (nếu muốn chạy Web Dashboard).
+#### 1. Tiền đề môi trường (Prerequisites) & Thiết Lập Tự Động (1-Click Setup)
+
+CyberV cung cấp script tự động kiểm tra môi trường máy trạm. Nếu phát hiện thiếu bất kỳ công cụ hoặc thư viện nào (Python, thư viện pip, Rust toolchain, C/C++ build tools MSVC), hệ thống sẽ **tự động tải về và cài đặt đầy đủ**:
+
+```powershell
+# Chạy script kiểm tra và tự động cài đặt toàn bộ môi trường (Python, Rust, C/C++):
+powershell -ExecutionPolicy Bypass -File .\setup.ps1
+```
+
+* **Công cụ được kiểm tra & tự động chuẩn bị**:
+  * **Python 3.10+**: Kiểm tra Python và tự động cài đặt qua `pip` các gói `PySide6`, `cryptography`, `pytest`, `pyinstaller`. Nếu chưa có Python, script tự tải qua `winget` hoặc web installer.
+  * **Rust Toolchain**: Tự động phát hiện `cargo`, `rustc`, `clippy`, `rustfmt`. Nếu chưa có, tự động cài đặt `rustup`.
+  * **C/C++ Build Tools (MSVC)**: Tự động phát hiện Visual Studio C++ Compiler (`cl.exe`) và VC Tools để biên dịch native CRT và link C libraries. Nếu thiếu, tự động kích hoạt tải qua `winget` hoặc bootstrapper.
 
 #### 2. Clone mã nguồn
 ```powershell
