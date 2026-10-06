@@ -1,6 +1,6 @@
 # ============================================================================
 # CyberV - Stufusic
-# Copyright (c) 2024-2026 Tersun - Stufusic. All rights reserved.
+# Copyright (c) 2024-2026 CyberV - Stufusic. All rights reserved.
 #
 # PROPRIETARY & SOURCE CODE LICENSE NOTICE
 # This software is protected by international copyright laws and treaties.
@@ -24,7 +24,7 @@ Set-Location $RootDir
 $HeaderSlash = @"
 // ============================================================================
 // CyberV - Stufusic
-// Copyright (c) 2024-2026 Tersun - Stufusic. All rights reserved.
+// Copyright (c) 2024-2026 CyberV - Stufusic. All rights reserved.
 //
 // PROPRIETARY & SOURCE CODE LICENSE NOTICE
 // This software is protected by international copyright laws and treaties.
@@ -45,7 +45,7 @@ $HeaderSlash = @"
 $HeaderHash = @"
 # ============================================================================
 # CyberV - Stufusic
-# Copyright (c) 2024-2026 Tersun - Stufusic. All rights reserved.
+# Copyright (c) 2024-2026 CyberV - Stufusic. All rights reserved.
 #
 # PROPRIETARY & SOURCE CODE LICENSE NOTICE
 # This software is protected by international copyright laws and treaties.
@@ -66,7 +66,7 @@ $HeaderHash = @"
 $HeaderDash = @"
 -- ============================================================================
 -- CyberV - Stufusic
--- Copyright (c) 2024-2026 Tersun - Stufusic. All rights reserved.
+-- Copyright (c) 2024-2026 CyberV - Stufusic. All rights reserved.
 --
 -- PROPRIETARY & SOURCE CODE LICENSE NOTICE
 -- This software is protected by international copyright laws and treaties.
@@ -84,12 +84,11 @@ $HeaderDash = @"
 
 "@
 
-Write-Host "Đang quét các tệp mã nguồn CyberV để thêm bản quyền và miễn trừ trách nhiệm..." -ForegroundColor Cyan
+Write-Host "Đang cập nhật tiêu đề bản quyền: CyberV - Stufusic..." -ForegroundColor Cyan
 
-# Lấy danh sách tệp được track bởi Git, loại trừ các thư mục phụ thuộc bên thứ 3
 $files = & git ls-files
 $updatedCount = 0
-$skippedCount = 0
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 foreach ($relPath in $files) {
     if ($relPath -match '^(tools|target|node_modules|dist|build|\.git)/') {
@@ -117,14 +116,21 @@ foreach ($relPath in $files) {
     }
 
     $content = [System.IO.File]::ReadAllText($fullPath, [System.Text.Encoding]::UTF8)
-    if ($content -match 'Copyright \(c\) 2024-2026 Tersun - Stufusic') {
-        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+
+    # 1. Thay thế CyberV - Stufusic thành CyberV - Stufusic nếu đã có
+    if ($content -match 'CyberV - Stufusic') {
+        $content = $content.Replace('CyberV - Stufusic', 'CyberV - Stufusic')
         [System.IO.File]::WriteAllText($fullPath, $content, $utf8NoBom)
-        $skippedCount++
+        $updatedCount++
         continue
     }
 
-    # Đối với Python hoặc script có shebang / coding pragma ở đầu
+    # 2. Nếu đã có CyberV - Stufusic chuẩn rồi
+    if ($content -match 'Copyright \(c\) 2024-2026 CyberV - Stufusic') {
+        continue
+    }
+
+    # 3. Nếu chưa có header thì chèn mới
     $newContent = ""
     if ($ext -eq '.py') {
         $lines = $content -split "`r?`n"
@@ -145,13 +151,11 @@ foreach ($relPath in $files) {
         $newContent = $headerToAdd + $content
     }
 
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($fullPath, $newContent, $utf8NoBom)
     $updatedCount++
 }
 
 Write-Host "====================================================" -ForegroundColor Green
 Write-Host "HOÀN TẤT CẬP NHẬT HEADER BẢN QUYỀN!" -ForegroundColor Green
-Write-Host "  - Số tệp đã thêm header: $updatedCount" -ForegroundColor Green
-Write-Host "  - Số tệp đã có sẵn:       $skippedCount" -ForegroundColor Gray
+Write-Host "  - Số tệp đã cập nhật: $updatedCount" -ForegroundColor Green
 Write-Host "====================================================" -ForegroundColor Green

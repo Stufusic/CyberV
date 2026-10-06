@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================================
 # CyberV - Stufusic
-# Copyright (c) 2024-2026 Tersun - Stufusic. All rights reserved.
+# Copyright (c) 2024-2026 CyberV - Stufusic. All rights reserved.
 #
 # PROPRIETARY & SOURCE CODE LICENSE NOTICE
 # This software is protected by international copyright laws and treaties.
