@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..services.isolation_service import IsolationInputError, IsolationService
+from ...services.isolation_service import IsolationInputError, IsolationService
 
 REFRESH_MS = 5000
 
