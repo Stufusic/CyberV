@@ -59,6 +59,9 @@ Docs/*
 !Docs/RESEARCH_BENCHMARKS.md
 release/
 *.zip
+tools/
+AtomicRedTeam/
+caldera/
 
 
 
